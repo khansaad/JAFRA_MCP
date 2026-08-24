@@ -1,105 +1,89 @@
 # async-profiler-mcp-server
 
-MCP server that gives Causa Engine remote control over JVM profiling.
+MCP server that exposes JFR profiling data from Kubernetes JVM pods to an LLM agent.
 
 ## What it does
 
-1. **Exposes 8 MCP tools** so Causa can trigger, monitor and retrieve JFR profiling data from any pod in the cluster.
-2. **Delegates all complexity** to the Profiling Controller (separate service, separate repo) via a clean REST API contract.
-3. **Zero knowledge of async-profiler** — the controller owns sidecar injection, JVM attachment, JFR generation, and report generation.
+1. **Exposes 9 MCP tools** so an agent can discover pods, trigger/monitor recordings, and retrieve JFR analysis from any pod in the cluster.
+2. **Delegates analysis** to the [Jafra Analyzer](https://github.com/causa-ai-hub/jafra) backend via a clean REST API — the MCP server has zero knowledge of JFR internals.
+3. **Live tools (5):** `list_profiled_pods`, `get_pod_jvm_status`, `get_jvm_statistics`, `get_recording_report`, `get_jfr_summary`.
+4. **Stub tools (4):** `start_recording`, `stop_recording`, `get_recording`, `get_flame_graph` — defined and advertised today; will be wired to the jafra-controller once its recording API is finalised.
 
 ## Architecture
 
 ```
-Prometheus Alert (heap > 75%)
-        │
-        ▼
-Causa Engine
-        │  MCP (stdio / SSE)
-        ▼
+LLM Agent
+    │  MCP (stdio / SSE / Streamable HTTP)
+    ▼
 async-profiler-mcp-server   ← this repo
-        │  REST
-        ▼
-Profiling Controller  ← other repo
-        │
-        ├─ Sidecar injection
-        ├─ async-profiler / jcmd
-        ├─ JFR download from pod
-        └─ JFR parse + report
+    │  REST
+    ▼
+Jafra Analyzer   (GET /api/v1/namespaces/{ns}/pods/{pod}/containers/{c}/report)
+    │            (GET /api/v1/namespaces/{ns}/pods/{pod}/containers/{c}/summary)
+    ▼
+Jafra Agent (DaemonSet — streams JFR chunks from every node)
+    │
+    └─ async-profiler sidecar injected by jafra-controller (MutatingWebhook)
 ```
 
 ## Documentation
 
-📋 **For Causa Engine team:**
-- **[MCP Tool Contract Specification](MCP_TOOL_CONTRACT_SPECIFICATION.md)** — Complete formal specification of all 8 tools with schemas, error codes, and examples
-- **[MCP Tool Quick Reference](MCP_TOOL_QUICK_REFERENCE.md)** — Quick lookup guide with examples and polling strategy
-
-🚀 **Getting started:**
-- **[Quick Start Guide](QUICK_START.md)** — Local dev, Minikube, and OpenShift deployment instructions
+- **[MCP Tool Contract Specification](MCP_TOOL_CONTRACT_SPECIFICATION.md)** — Formal spec for all 9 tools with schemas, error codes, and examples
+- **[MCP Tool Quick Reference](MCP_TOOL_QUICK_REFERENCE.md)** — Quick lookup guide with workflow and polling strategy
+- **[Quick Start Guide](QUICK_START.md)** — Local dev and Kind/Kubernetes deployment
+- **[Integration Reference](INTEGRATION_REFERENCE.md)** — Image, environment variables, transport modes
 
 ## MCP Tools
 
-| Tool                   | What it does                                                                                                 |
-|------------------------|--------------------------------------------------------------------------------------------------------------|
-| `list_profiled_pods`   | Discover pods with an async-profiler sidecar                                                                 |
-| `get_pod_jvm_status`   | Check profiler readiness before starting a recording                                                         |
-| `get_jvm_statistics`   | Live heap / thread / GC snapshot (no recording needed)                                                       |
-| `start_recording`      | Trigger a recording (returns `recording_id`). Default 5 min. Pass `duration_seconds=0` to run until stopped. |
-| `stop_recording`       | Stop an in-progress recording early (`terminationReason=USER_REQUESTED`)                                     |
-| `get_recording`        | Poll status: `QUEUED → RECORDING → DOWNLOADING → ANALYSING → READY`                                          |
-| `get_recording_report` | Retrieve full structured analysis (call after status=READY)                                                  |
-| `get_flame_graph`      | Retrieve flame graph as SVG or JSON hotspot list                                                             |
+| # | Tool                   | Status  | What it does                                                                    |
+|---|------------------------|---------|---------------------------------------------------------------------------------|
+| 1 | `list_profiled_pods`   | ✅ Live  | Discover pods with an async-profiler sidecar                                    |
+| 2 | `get_pod_jvm_status`   | ✅ Live  | Profiler readiness + latest recording info                                      |
+| 3 | `get_jvm_statistics`   | ✅ Live  | Live heap / thread / GC snapshot (no recording needed)                          |
+| 4 | `start_recording`      | 🔧 Stub | Trigger a JFR recording — wired to jafra-controller when recording API is ready |
+| 5 | `stop_recording`       | 🔧 Stub | Stop an in-progress recording early                                             |
+| 6 | `get_recording`        | 🔧 Stub | Poll recording status: `QUEUED → RECORDING → ANALYSING → READY`                 |
+| 7 | `get_recording_report` | ✅ Live  | JMC rule-based findings for a pod/time window (calls `/report`)                 |
+| 8 | `get_jfr_summary`      | ✅ Live  | Compact LLM-ready JFR event summary (calls `/summary`)                          |
+| 9 | `get_flame_graph`      | 🔧 Stub | Flame graph as SVG or JSON — wired to jafra-controller when ready               |
 
-## Typical Causa flow
-
-```
-1. Alert: heap at 78%
-2. list_profiled_pods()           → find myapp-0
-3. get_pod_jvm_status(myapp-0)   → profiler READY
-4. start_jfr_recording(myapp-0, duration_seconds=300)
-                                  → recording_id = "rec-abc"
-5. poll get_recording_status(rec-abc) every 15 s
-                                  → RECORDING … ANALYSING … READY
-6. get_jfr_report(rec-abc)       → ProfilingReport JSON
-   • summary.observations        → human-readable findings
-   • cpu.topFrames                → top-5 hotspot methods
-   • memory.topAllocators         → top-5 allocation sites
-   • gc.recentEvents              → GC pause history
-   • threads.topThreads           → per-thread CPU usage
-7. (optionally) get_flame_graph(rec-abc, format=json)
-8. Causa correlates with Quarkus metrics + K8s events → RCA
-```
-
-## Controller REST API contract
-
-The Profiling Controller **must** implement these endpoints:
+## Typical agent flow (current)
 
 ```
-GET    /pods                                         → List<ProfiledPodMetadata>
-GET    /pods/{pod}/status?namespace=                 → PodJvmStatus
-GET    /pods/{pod}/stats                             → JvmStatistics
-POST   /pods/{pod}/recordings                        → RecordingMetadata
-DELETE /recordings/{id}                              → RecordingMetadata
-GET    /recordings/{id}/status                       → RecordingMetadata
-GET    /recordings/{id}/report                       → ProfilingReport
-GET    /recordings/{id}/flamegraph?format=svg|json   → String
-GET    /pods/{pod}/recordings?limit=                 → List<RecordingMetadata>
+1. list_profiled_pods()                               → find pods being profiled
+2. get_jfr_summary(ns, pod, container, last="5m")     → broad performance overview
+   • scope       — recording window, file metadata
+   • environment — JVM version, GC config, heap/container limits
+   • signals     — CPU, GC pauses, heap, locks, allocations, threads, errors
+3. get_recording_report(ns, pod, container, last="5m") → JMC rule findings
+   • findings["VMOperations"] score=100  → long VM operations
+   • findings["GC Pressure"]  score=84  → GC is a problem
+   • findings["PID-1 Rule"]   score=75  → Java running as PID 1
+4. Agent correlates findings → Root Cause Analysis
 ```
 
-All request/response types are defined in [`Dtos.java`](src/main/java/io/causa/profiler/dto/Dtos.java).
+## Jafra Analyzer REST API (live endpoints)
+
+```
+GET /api/v1/namespaces/{ns}/pods/{pod}/containers/{container}/report?last=5m
+    → JafraSummaryReport  (JMC rule-based findings keyed by rule ID)
+
+GET /api/v1/namespaces/{ns}/pods/{pod}/containers/{container}/summary?last=5m
+    → JafraSummaryDocument  (raw JFR event statistics, transformed to McpSummary)
+```
+
+All request/response types are defined in [`ProfilingModels.java`](src/main/java/io/causa/profiler/dto/ProfilingModels.java).
 
 ## Configuration
 
-```yaml
-# src/main/resources/application.yml
-quarkus:
-  rest-client:
-    profiler-controller:
-      url: "http://profiling-controller:8081"   # or set PROFILER_CONTROLLER_URL env var
+```properties
+# src/main/resources/application.properties
 
-profiler:
-  controller:
-    default-namespace: "default"               # or set PROFILER_DEFAULT_NAMESPACE env var
+# Jafra Analyzer base URL (or set JAFRA_ANALYZER_URL env var)
+quarkus.rest-client.jafra-analyzer.url=${JAFRA_ANALYZER_URL:http://localhost:8080}
+
+# Default Kubernetes namespace when callers omit it (or set PROFILER_DEFAULT_NAMESPACE)
+profiler.controller.default-namespace=${PROFILER_DEFAULT_NAMESPACE:default}
 ```
 
 ## Building
@@ -108,10 +92,12 @@ profiler:
 ./mvnw clean package -DskipTests
 ```
 
-## Running (dev)
+## Building the image
 
 ```bash
-PROFILER_CONTROLLER_URL=http://localhost:8081 ./mvnw quarkus:dev
+# linux/amd64 (for Kubernetes / OCP deployments)
+podman build --platform linux/amd64 -t quay.io/khansaad/async-profiler-mcp-server:0.1.0 .
+podman push quay.io/khansaad/async-profiler-mcp-server:0.1.0
 ```
 
 ## Testing
@@ -125,27 +111,22 @@ PROFILER_CONTROLLER_URL=http://localhost:8081 ./mvnw quarkus:dev
 ```
 async-profiler-mcp-server/
 ├── Dockerfile
-├── LICENSE
-├── QUICK_START.md
-├── mvnw / mvnw.cmd
-├── .mvn/wrapper/maven-wrapper.properties
+├── smoke_test.py                              ← end-to-end MCP handshake smoke test
 ├── manifests/
-│   ├── async-profiler-mcp-server-minikube.yaml
-│   └── async-profiler-mcp-server-openshift.yaml
-├── pom.xml
+│   ├── async-profiler-mcp-server-kind.yaml   ← Kind deployment (jafra-system namespace)
+│   ├── async-profiler-mcp-server-openshift.yaml
+│   └── async-profiler-mcp-server-minikube.yaml
 └── src/
-    ├── main/
-    │   ├── java/io/causa/profiler/
-    │   │   ├── dto/
-    │   │   │   └── Dtos.java               ← shared DTO contract (enums + records)
-    │   │   ├── mcp/
-    │   │   │   └── ProfilingTools.java     ← all 8 @Tool methods
-    │   │   └── service/
-    │   │       ├── ProfilerService.java    ← interface (controller contract)
-    │   │       └── ProfilerServiceClient.java ← MicroProfile REST client impl
-    │   └── resources/
-    │       └── application.yml
-    └── test/
-        └── java/io/causa/profiler/mcp/
-            └── ProfilingToolsTest.java     ← unit tests (8 tools, mocked service)
+    ├── main/java/io/causa/profiler/
+    │   ├── dto/
+    │   │   └── ProfilingModels.java          ← all DTOs: ProfilingModels, JafraSummaryReport,
+    │   │                                        JafraSummaryDocument, McpSummary, RecordingMetadata…
+    │   ├── mcp/
+    │   │   └── ProfilingTools.java           ← all 9 @Tool methods
+    │   └── service/
+    │       ├── ProfilerService.java          ← interface
+    │       └── ProfilerServiceClient.java    ← Jafra Analyzer REST client +
+    │                                            summary_to_mcp.py logic (Java port)
+    └── test/java/io/causa/profiler/mcp/
+        └── ProfilingToolsTest.java           ← 16 unit tests (all 9 tools, mocked service)
 ```

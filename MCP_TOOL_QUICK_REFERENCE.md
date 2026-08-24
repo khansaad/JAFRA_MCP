@@ -1,41 +1,57 @@
 # MCP Tool Quick Reference
 
-**For:** Causa Engine Developers  
-**Purpose:** Quick lookup of MCP tool names, inputs, outputs, and example calls
+**For:** LLM Agent / Causa Engine Developers  
+**Purpose:** Quick lookup of all 9 MCP tools — inputs, outputs, and workflow
 
 ---
 
 ## Tools at a Glance
 
-| # | Tool | Input | Output | When | Frequency |
-|-|-|-|-|-|-|
-| 1 | `list_profiled_pods` | `namespace?` | `List<Pod>` | Discovery | Once/alert |
-| 2 | `get_pod_jvm_status` | `pod, namespace?` | `Status` | Pre-check | Once |
-| 3 | `get_jvm_statistics` | `pod` | `Stats` | Quick snapshot | High-freq |
-| 4 | `start_recording` | `pod, duration?, type?` | `RecordingId` | Alert | Once |
-| 5 | `stop_recording` | `recording_id` | `Status` | Alert resolves | Once |
-| 6 | `get_recording` | `recording_id` | `Status` | Poll | Every 10-15s |
-| 7 | `get_recording_report` | `recording_id` | `Report` | After READY | Once |
-| 8 | `get_flame_graph` | `recording_id, format?` | `SVG|JSON` | Analysis | Once or twice |
+| # | Tool | Status | Input | Output | When |
+|---|------|--------|-------|--------|------|
+| 1 | `list_profiled_pods` | ✅ Live | `namespace?` | Pod list | Discovery |
+| 2 | `get_pod_jvm_status` | ✅ Live | `pod, namespace?` | Status | Pre-check |
+| 3 | `get_jvm_statistics` | ✅ Live | `pod` | Live stats | Quick snapshot |
+| 4 | `start_recording` | 🔧 Stub | `pod, duration?, type?` | RecordingMetadata | On alert |
+| 5 | `stop_recording` | 🔧 Stub | `recording_id` | RecordingMetadata | Alert resolves |
+| 6 | `get_recording` | 🔧 Stub | `recording_id` | RecordingMetadata | Poll every 10–15s |
+| 7 | `get_recording_report` | ✅ Live | `ns?, pod, container, last?` | JMC findings map | Analysis |
+| 8 | `get_jfr_summary` | ✅ Live | `ns?, pod, container, last?` | McpSummary | Analysis |
+| 9 | `get_flame_graph` | 🔧 Stub | `recording_id, format?` | SVG \| JSON | Visualization |
+
+> **Stub tools** return a valid placeholder response. They will be wired to the jafra-controller recording API once that is finalised.
 
 ---
 
-## Quick Workflow
+## Current Workflow (live tools)
+
+```
+1. get_jfr_summary(ns, pod, container, last="5m")
+   → broad performance overview: CPU, GC, heap, locks, errors
+
+2. get_recording_report(ns, pod, container, last="5m")
+   → 60+ JMC rule findings, each with score + description
+
+3. Correlate findings → Root Cause Analysis
+```
+
+## Future Workflow (once stub tools are wired)
 
 ```
 Prometheus Alert (heap > 75%)
   ↓
-1. list_profiled_pods() → find target pods
+1. list_profiled_pods()                           → find target pods
   ↓
-2. get_pod_jvm_status(pod) → verify READY
+2. get_pod_jvm_status(pod)                        → verify READY
   ↓
-3. start_recording(pod) → get recording_id
+3. start_recording(pod, duration_seconds=300)     → get recording_id
   ↓
-4. POLL get_recording(recording_id) every 10-15s until status=READY
+4. POLL get_recording(recording_id) every 10–15s until status=READY
   ↓
-5. get_recording_report(recording_id) → parse findings
+5. get_recording_report(ns, pod, container)       → JMC findings
+   get_jfr_summary(ns, pod, container)            → event-level signals
   ↓
-(optional) get_flame_graph(recording_id, format='json') → analyze hotspots
+(optional) get_flame_graph(recording_id, format="json")
   ↓
 Correlate with metrics → Root Cause Analysis
 ```
@@ -44,248 +60,244 @@ Correlate with metrics → Root Cause Analysis
 
 ## Tool Details
 
-### 1️⃣ list_profiled_pods
+### 1. `list_profiled_pods` ✅
 
-Discover pods with profiler sidecar.
+Discover pods with an async-profiler sidecar.
 
 **Input:**
 ```json
-{
-  "namespace": "production"  // optional
-}
+{ "namespace": "default" }
 ```
 
 **Output:**
 ```json
-[
-  {
-    "podName": "myapp-0",
-    "namespace": "production",
-    "profilerStatus": "READY",
-    "jvmVersion": "21.0.2"
-  }
-]
+[{ "podName": "auth-cache-…", "namespace": "default", "profilerStatus": "READY" }]
 ```
-
-**Error Codes:** `CLUSTER_UNREACHABLE`, `RBAC_FORBIDDEN`, `INTERNAL_ERROR`
 
 ---
 
-### 2️⃣ get_pod_jvm_status
+### 2. `get_pod_jvm_status` ✅
 
-Verify profiler readiness.
+Verify profiler readiness before requesting a report.
 
 **Input:**
 ```json
-{
-  "pod_name": "myapp-0",
-  "namespace": "production"  // optional
-}
+{ "pod_name": "auth-cache-6fcdc64b64-2cnw9", "namespace": "default" }
 ```
 
 **Output:**
 ```json
 {
-  "podName": "myapp-0",
+  "podName": "auth-cache-6fcdc64b64-2cnw9",
   "profilerStatus": "READY",
-  "jvmHealth": {
-    "isHealthy": true,
-    "activeThreadCount": 42
-  },
-  "latestRecording": { /* RecordingMetadata or null */ }
+  "jvmHealth": { "isHealthy": true, "activeThreadCount": 42 }
 }
 ```
 
-**Error Codes:** `POD_NOT_FOUND`, `SIDECAR_NOT_READY`, `JVM_UNREACHABLE`, `UNAUTHORIZED`
-
 ---
 
-### 3️⃣ get_jvm_statistics
+### 3. `get_jvm_statistics` ✅
 
-Get live JVM metrics (no recording needed).
+Live JVM metrics — no recording needed.
 
 **Input:**
 ```json
-{
-  "pod_name": "myapp-0"
-}
+{ "pod_name": "auth-cache-6fcdc64b64-2cnw9" }
 ```
 
 **Output:**
 ```json
 {
-  "podName": "myapp-0",
-  "capturedAt": "2025-01-15T14:32:15Z",
-  "heapUsedBytes": 1610612736,
-  "heapMaxBytes": 2147483648,
-  "heapUsagePercent": 75.0,
-  "threadCount": 42,
-  "gcCollectionCount": 127
+  "podName": "auth-cache-6fcdc64b64-2cnw9",
+  "capturedAt": "2026-08-24T…",
+  "heapUsedBytes": 258375680,
+  "heapMaxBytes": 396361728,
+  "heapUsagePercent": 65.2,
+  "threadCount": 38,
+  "gcCollectionCount": 14
 }
 ```
 
-**Error Codes:** `POD_NOT_FOUND`, `JVM_UNREACHABLE`, `TIMEOUT`, `INTERNAL_ERROR`
-
 ---
 
-### 4️⃣ start_recording
+### 4. `start_recording` 🔧 Stub
 
-Trigger recording (default 5 min).
+Trigger a JFR recording. Returns immediately with a `recording_id`.
 
 **Input:**
 ```json
 {
-  "pod_name": "myapp-0",
-  "duration_seconds": 300,      // optional, default 300
-  "profile_type": "CPU"         // optional, default "CPU"
+  "pod_name": "auth-cache-6fcdc64b64-2cnw9",
+  "duration_seconds": 300,
+  "profile_type": "CPU"
 }
 ```
 
-**Supported profile_types:** `CPU`, `MEMORY`, `LOCK`, `ALLOCATION`, `ALL`
+**Supported `profile_type` values:** `CPU`, `MEMORY`, `LOCK`, `ALLOCATION`, `ALL`
 
-**Output:**
-```json
-{
-  "recordingId": "rec-2025-01-15-143200-abc123",
-  "podName": "myapp-0",
-  "status": "QUEUED",
-  "createdAt": "2025-01-15T14:32:00Z",
-  "profileType": "CPU"
-}
-```
-
-**Error Codes:** `POD_NOT_FOUND`, `SIDECAR_NOT_READY`, `RECORDING_IN_PROGRESS`, `STORAGE_FULL`
+**Output:** `RecordingMetadata` with `status: "QUEUED"`
 
 ---
 
-### 5️⃣ stop_recording
+### 5. `stop_recording` 🔧 Stub
 
-Stop active recording.
+Stop an active recording early.
 
 **Input:**
 ```json
-{
-  "recording_id": "rec-2025-01-15-143200-abc123"
-}
+{ "recording_id": "rec-abc123" }
 ```
 
-**Output:**
-```json
-{
-  "recordingId": "rec-2025-01-15-143200-abc123",
-  "status": "DOWNLOADING",
-  "terminationReason": "USER_REQUESTED",
-  "sizeBytes": 15728640
-}
-```
-
-**Error Codes:** `RECORDING_NOT_FOUND`, `RECORDING_ALREADY_STOPPED`, `INTERNAL_ERROR`
+**Output:** `RecordingMetadata` with `terminationReason: "USER_REQUESTED"`
 
 ---
 
-### 6️⃣ get_recording
+### 6. `get_recording` 🔧 Stub
 
-Poll recording status.
+Poll recording status. Call every 10–15 seconds.
 
 **Input:**
 ```json
-{
-  "recording_id": "rec-2025-01-15-143200-abc123"
-}
+{ "recording_id": "rec-abc123" }
 ```
 
-**Output:**
-```json
-{
-  "recordingId": "rec-2025-01-15-143200-abc123",
-  "status": "READY",                          // QUEUED → RECORDING → DOWNLOADING → ANALYSING → READY → DELIVERED
-  "terminationReason": "DURATION_EXPIRED",
-  "sizeBytes": 15728640
-}
-```
-
-**Status Lifecycle:**
+**Status lifecycle:**
 ```
 QUEUED → RECORDING → DOWNLOADING → ANALYSING → READY → DELIVERED
-                                              ↓
-                                        Call get_recording_report here
+                                                ↑
+                                     call get_recording_report here
 ```
 
-**Possible Early Termination:** `CONTAINER_OOM`, `POD_DELETED`, `ERROR`
+**Early termination reasons:** `CONTAINER_OOM`, `POD_DELETED`, `ERROR`
 
 ---
 
-### 7️⃣ get_recording_report
+### 7. `get_recording_report` ✅
 
-Get full analysis (only when status=READY).
+JMC rule-based findings for a pod/time window. Calls the Jafra Analyzer `/report` endpoint.
 
 **Input:**
 ```json
 {
-  "recording_id": "rec-2025-01-15-143200-abc123"
+  "namespace": "default",
+  "pod": "auth-cache-6fcdc64b64-2cnw9",
+  "container": "auth-cache",
+  "last": "5m"
 }
 ```
 
-**Output:** `ProfilingReport` with:
-- **summary** — overall findings + observations
-- **cpu** — top-5 hotspot methods
-- **memory** — top-5 allocation sites
-- **gc** — GC pause summary + recent events
-- **threads** — thread breakdown
-- **locks** — lock contention
-- **jvm** — JVM metadata
-
-**Key fields in report.summary:**
+**Output:** `JafraSummaryReport` — a map of findings keyed by rule ID:
 ```json
 {
-  "cpuUsagePercent": 42.5,
-  "heapUsagePercent": 75.0,
-  "gcEventCount": 3,
-  "topHotspot": "com.myapp.processor.ProcessorService.process",
-  "observations": [
-    "CPU usage is moderate but concentrated in request processing",
-    "Heap is at 75% — consider monitoring after deployment"
-  ]
-}
-```
-
----
-
-### 8️⃣ get_flame_graph
-
-Get flame graph (SVG or JSON).
-
-**Input:**
-```json
-{
-  "recording_id": "rec-2025-01-15-143200-abc123",
-  "format": "json"  // "svg" or "json", default "json"
-}
-```
-
-**Output (JSON format):**
-```json
-{
-  "recordingId": "rec-2025-01-15-143200-abc123",
-  "format": "json",
-  "frames": [
-    {
-      "signature": "java.lang.Thread.run",
-      "samples": 11000,
-      "percent": 100.0,
-      "children": [ /* nested frames */ ]
+  "namespace": "default",
+  "pod": "auth-cache-6fcdc64b64-2cnw9",
+  "container": "auth-cache",
+  "generatedAt": "2026-08-24T…",
+  "findings": {
+    "VMOperations": {
+      "score": 100.0,
+      "name": "VMOperation Peak Duration",
+      "topic": "vm_operations",
+      "description": "There are long lasting blocking VM operations…"
+    },
+    "HighGc": {
+      "score": 91.9,
+      "name": "GC Pressure",
+      "topic": "heap",
+      "description": "The JVM was paused for 1.0 during…"
+    },
+    "PID1Rule": {
+      "score": 75.0,
+      "name": "PID-1 Rule",
+      "topic": "jvm_information",
+      "description": "Process runs with PID 1…"
     }
-  ]
+  }
 }
 ```
 
-**Output (SVG format):** Self-contained HTML/SVG string ready for browser display.
+**Interpreting scores:** Higher = worse. Negative = not applicable to this recording.
+
+---
+
+### 8. `get_jfr_summary` ✅
+
+Compact LLM-ready event summary. Calls the Jafra Analyzer `/summary` endpoint and transforms the raw JFR statistics into a structured `McpSummary`.
+
+**Input:**
+```json
+{
+  "namespace": "default",
+  "pod": "auth-cache-6fcdc64b64-2cnw9",
+  "container": "auth-cache",
+  "last": "5m"
+}
+```
+
+**Output:** `McpSummary` with three top-level sections:
+
+```json
+{
+  "scope": {
+    "namespace": "default",
+    "pod": "auth-cache-6fcdc64b64-2cnw9",
+    "container": "auth-cache",
+    "window": { "start": "…", "end": "…", "from": "…", "to": "…" },
+    "bytes": 5021697,
+    "chunks": 51,
+    "recordings": ["profile-0.jfr", "profile-1.jfr", "…"]
+  },
+  "environment": {
+    "jvm": {
+      "jvmName": "OpenJDK 64-Bit Server VM",
+      "jvmVersion": "21.0.10+7-LTS",
+      "jvmArguments": "-XX:+UseContainerSupport -Xms256m -Xmx378m …",
+      "pid": "1"
+    },
+    "gc": { "young": "DefNew", "old": "SerialOld", "gcTimeRatio": 99.0 },
+    "heap_min_b": 268435456,
+    "heap_max_b": 396361728,
+    "container": { "containerType": "cgroupv2", "cpus": 1, "memory_limit_b": 1073741824 },
+    "tick_hz": 1000000000
+  },
+  "signals": {
+    "cpu_load_machine_pct": { "unit": "%", "min": 0.0, "max": 43.2, "avg": 25.5 },
+    "gc": {
+      "count": 13,
+      "pause_ns": { "unit": "ticks", "avg": 341672906 },
+      "collectors": ["DefNew", "SerialOld"],
+      "causes": ["Allocation Failure", "Metadata GC Threshold"]
+    },
+    "heap": {
+      "used_b": { "avg": 280000000 },
+      "metaspace": { "used_b": { "avg": 62000000 } }
+    },
+    "locks": {
+      "monitor_enter": { "count": 3, "classes": ["java.util.HashMap", "…"] }
+    },
+    "errors": { "count": 1, "classes": ["java.lang.NoSuchMethodError"] }
+  }
+}
+```
+
+---
+
+### 9. `get_flame_graph` 🔧 Stub
+
+Flame graph for a completed recording.
+
+**Input:**
+```json
+{ "recording_id": "rec-abc123", "format": "json" }
+```
+
+**`format` values:** `json` (default, LLM-readable hotspot tree) · `svg` (interactive browser page)
 
 ---
 
 ## Error Handling
 
-All errors follow this envelope:
+All errors follow the JSON-RPC error envelope:
 
 ```json
 {
@@ -293,127 +305,28 @@ All errors follow this envelope:
     "code": -32603,
     "message": "Internal error",
     "data": {
-      "errorCode": "SPECIFIC_ERROR_CODE",
+      "errorCode": "SPECIFIC_CODE",
       "message": "Human-readable message",
-      "details": "Additional context",
-      "timestamp": "2025-01-15T14:30:00Z"
+      "timestamp": "2026-08-24T…"
     }
   }
 }
 ```
 
-**Common Error Codes:**
-
-| Code | HTTP | Meaning | Fix |
-|------|------|---------|-----|
-| `POD_NOT_FOUND` | 404 | Pod doesn't exist | Verify pod name |
-| `SIDECAR_NOT_READY` | 503 | Sidecar not attached | Wait and retry |
-| `RECORDING_IN_PROGRESS` | 409 | Pod already recording | Wait or call `stop_recording` |
-| `RECORDING_NOT_READY` | 409 | Analysis still running | Retry after 10s |
-| `JVM_UNREACHABLE` | 503 | Can't reach JVM | Check pod logs |
-| `CONTAINER_OOM` | 500 | Pod ran out of memory | Check pod events |
-| `INTERNAL_ERROR` | 500 | Server error | Check logs; retry |
-
 ---
 
-## Polling Strategy
+## Polling Strategy (for stub tools, when wired)
 
-**Recommended polling intervals:**
-
-| Operation | Interval | Total Timeout |
-|-----------|----------|---------------|
-| `get_recording_status` | 10–15 seconds | 10–15 minutes |
-| `get_jvm_statistics` (monitoring) | 5–10 seconds | N/A (continuous) |
-| `get_pod_jvm_status` (health check) | 30 seconds | N/A (background) |
-
----
-
-## State Transitions
-
-### Recording Status
-
-```
-       start_recording()
-              ↓
-          QUEUED
-          /    \
-     (waiting)  (profiler acquired slot)
-        /            \
-       /              ↓
-                   RECORDING
-                   /    \
-      (duration    |      | (stop_recording)
-       expired)   |       |
-                  ↓       ↓
-              DOWNLOADING
-                  ↓
-              ANALYSING
-                  ↓
-                 READY ←────← get_recording_report()
-                  ↓
-             DELIVERED
-```
-
-**Early termination:**
-- `CONTAINER_OOM` — Container ran out of memory
-- `POD_DELETED` — Pod was deleted/evicted
-- `ERROR` — Recording failed
-
----
-
-## Example Causa Workflow
-
-### Full Alert Response
-
-```python
-def handle_heap_alert(pod_name):
-    # 1. Verify pod is ready
-    status = get_pod_jvm_status(pod_name)
-    if status['profilerStatus'] != 'READY':
-        return None
-    
-    # 2. Start recording
-    result = start_recording(pod_name, duration_seconds=300)
-    recording_id = result['recordingId']
-    
-    # 3. Poll for completion (max 10 minutes)
-    for i in range(40):  # 40 * 15s = 10 min
-        recording = get_recording(recording_id)
-        if recording['status'] == 'READY':
-            break
-        elif recording['status'] == 'ERROR':
-            return f"Recording failed: {recording['terminationReason']}"
-        time.sleep(15)
-    
-    # 4. Get report
-    report = get_recording_report(recording_id)
-    
-    # 5. Analyze
-    findings = parse_report(report)
-    correlate_with_metrics(findings)
-    
-    return findings
-```
-
----
-
-## Testing Checklist
-
-- [ ] Can list profiled pods
-- [ ] Can verify pod health before recording
-- [ ] Can start recording and get recording_id
-- [ ] Can poll status transitions (QUEUED → RECORDING → ... → READY)
-- [ ] Can retrieve report after READY
-- [ ] Can get flame graph in both JSON and SVG formats
-- [ ] Can handle errors gracefully (POD_NOT_FOUND, TIMEOUT, etc.)
-- [ ] Polling timeout is configured appropriately
-- [ ] Report parsing handles all sections (cpu, memory, gc, threads, locks)
+| Operation | Interval | Timeout |
+|-----------|----------|---------|
+| `get_recording` | 10–15 s | 10–15 min |
+| `get_jvm_statistics` (monitoring) | 5–10 s | continuous |
 
 ---
 
 ## Links
 
-- **Full Specification:** `MCP_TOOL_CONTRACT_SPECIFICATION.md`
-- **DTOs:** `Dtos.java`
-- **Tools Implementation:** `ProfilingTools.java`
-- **Architecture:** `README.md`
+- **Full Specification:** [`MCP_TOOL_CONTRACT_SPECIFICATION.md`](MCP_TOOL_CONTRACT_SPECIFICATION.md)
+- **Models:** [`ProfilingModels.java`](src/main/java/io/causa/profiler/dto/ProfilingModels.java)
+- **Tools implementation:** [`ProfilingTools.java`](src/main/java/io/causa/profiler/mcp/ProfilingTools.java)
+- **Architecture:** [`README.md`](README.md)

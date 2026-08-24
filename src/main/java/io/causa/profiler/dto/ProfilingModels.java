@@ -335,6 +335,8 @@ public final class ProfilingModels {
             public ThreadStats threads;
             public ErrorStats errors;
             public ClassloadingStats classloading;
+            /** Non-null only when metaspace allocation failures were observed. */
+            @JsonProperty("metaspace_failure_detail") public MetaspaceFailureDetail metaspaceFailureDetail;
         }
 
         @RegisterForReflection
@@ -476,6 +478,7 @@ public final class ProfilingModels {
         public static class ErrorStats {
             public long count;
             public List<String> classes;
+            /** Capped at 10 entries to keep payload size manageable. */
             public List<String> messages;
         }
 
@@ -485,6 +488,17 @@ public final class ProfilingModels {
             public long count;
             @JsonProperty("loadedClassCount_samples") public List<String> loadedClassCountSamples;
             @JsonProperty("unloadedClassCount_samples") public List<String> unloadedClassCountSamples;
+        }
+
+        /**
+         * Present only when metaspace allocation failures were recorded.
+         */
+        @RegisterForReflection
+        @JsonInclude(JsonInclude.Include.NON_NULL)
+        public static class MetaspaceFailureDetail {
+            @JsonProperty("classLoaders") public List<String> classLoaders;
+            @JsonProperty("objectTypes")  public List<String> objectTypes;
+            @JsonProperty("size_b")       public MetricStats sizeB;
         }
     }
 

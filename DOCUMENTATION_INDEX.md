@@ -1,191 +1,75 @@
-# MCP Tool Contracts — Documentation Index
+# Documentation Index
 
-**Created:** 2025-01  
-**Status:** ✅ Complete and Ready for Sharing  
-**Audience:** Causa Engine team, Profiling Controller team
-
----
-
-## 📚 Documents
-
-### 1. **MCP_TOOL_CONTRACT_SPECIFICATION.md** (Primary Reference)
-   - **Size:** 40 KB, 1,566 lines
-   - **Purpose:** Formal, comprehensive specification
-   - **For:** Developers implementing MCP tool consumers
-   - **Contains:**
-     - Complete definition of all 8 tools
-     - Detailed input/output schemas (JSON)
-     - All error codes with HTTP status and mitigation
-     - Full example request/response pairs (JSON-RPC)
-     - Type definitions for all DTOs
-     - Backwards compatibility notes
-     - State machine diagrams
-
-### 2. **MCP_TOOL_QUICK_REFERENCE.md** (Quick Lookup)
-   - **Size:** 9 KB, 419 lines
-   - **Purpose:** Quick reference for development
-   - **For:** Developers needing quick answers
-   - **Contains:**
-     - Tools at a glance (table format)
-     - Quick workflow diagram
-     - Condensed tool details
-     - Polling strategy recommendations
-     - Error handling cheatsheet
-     - Example Causa code (Python)
-     - Testing checklist
-
-### 3. **README.md** (Updated)
-   - Links to both specification documents
-   - Tool inventory with updated names
-   - Architecture overview
-   - Quick setup guide
-
-### 4. **Dtos.java** (Source Truth)
-   - Shared with Profiling Controller team
-   - All DTOs implement specification
-   - Serves as contract document
+**Repository:** async-profiler-mcp-server  
+**Image:** `quay.io/khansaad/async-profiler-mcp-server:0.1.0`  
+**Status:** ✅ Live tools working on Kind cluster
 
 ---
 
-## 🎯 Which Document to Use?
+## Documents
 
-**For first-time integration:**
-→ Start with **MCP_TOOL_QUICK_REFERENCE.md**
+### [`README.md`](README.md)
+Architecture overview, tool inventory, typical agent flow, project layout.  
+**Start here.**
 
-**For implementation details:**
-→ Reference **MCP_TOOL_CONTRACT_SPECIFICATION.md**
+### [`QUICK_START.md`](QUICK_START.md)
+Step-by-step instructions for local dev, Kind deployment, and OpenShift deployment.  
+Includes smoke test instructions.
 
-**For error handling:**
-→ Check both (quick ref has table, spec has details)
+### [`INTEGRATION_REFERENCE.md`](INTEGRATION_REFERENCE.md)
+Image details, environment variables, transport modes, health probes, and full `McpSummary` / `JafraSummaryReport` response shapes.  
+**For teams integrating the MCP server into an agent or infrastructure.**
 
-**For exact request format:**
-→ Use **MCP_TOOL_CONTRACT_SPECIFICATION.md** examples
+### [`MCP_TOOL_QUICK_REFERENCE.md`](MCP_TOOL_QUICK_REFERENCE.md)
+All 9 tools at a glance — inputs, outputs, real example payloads, workflow diagrams, error handling.  
+**For daily development reference.**
 
-**For state machine:**
-→ Both documents have it; spec is more detailed
-
----
-
-## 🔧 Tools Documented
-
-| # | Tool | Input | Output | Polling? |
-|-|-|-|-|-|
-| 1 | `list_profiled_pods` | namespace? | Pod list | No |
-| 2 | `get_pod_jvm_status` | pod, ns? | Status | No |
-| 3 | `get_jvm_statistics` | pod | Stats | Yes (high-freq) |
-| 4 | `start_recording` | pod, duration?, type? | RecordingId | No |
-| 5 | `stop_recording` | recording_id | Status | No |
-| 6 | `get_recording` | recording_id | Status | **Yes** (10-15s) |
-| 7 | `get_recording_report` | recording_id | Report | No |
-| 8 | `get_flame_graph` | recording_id, format? | SVG/JSON | No |
+### [`MCP_TOOL_CONTRACT_SPECIFICATION.md`](MCP_TOOL_CONTRACT_SPECIFICATION.md)
+Full formal specification with complete JSON schemas, all error codes, and example JSON-RPC request/response pairs.  
+**For deep-dive implementation and edge-case handling.**
 
 ---
 
-## 📋 Specification Details Per Tool
+## Tool Status Summary
 
-Each tool specifies:
-
-1. **Description** — What it does and when to use
-2. **Purpose** — Who calls it and frequency
-3. **Input Schema**
-   - Type definitions (string, integer, long, double, enum)
-   - Required/optional flags
-   - Example values
-4. **Output Schema**
-   - Complete JSON structure
-   - Field types and nullability
-   - Nested objects with full schemas
-   - Arrays with element types
-5. **Error Codes**
-   - HTTP status codes
-   - Error code meanings
-   - Mitigation steps
-6. **Example Request** — Full JSON-RPC request
-7. **Example Response** — Full JSON-RPC response
+| # | Tool | Status | Backend |
+|---|------|--------|---------|
+| 1 | `list_profiled_pods` | ✅ Live (stub impl) | jafra-controller (TBD) |
+| 2 | `get_pod_jvm_status` | ✅ Live (stub impl) | jafra-controller (TBD) |
+| 3 | `get_jvm_statistics` | ✅ Live (stub impl) | jafra-controller (TBD) |
+| 4 | `start_recording` | 🔧 Stub | jafra-controller (TBD) |
+| 5 | `stop_recording` | 🔧 Stub | jafra-controller (TBD) |
+| 6 | `get_recording` | 🔧 Stub | jafra-controller (TBD) |
+| 7 | `get_recording_report` | ✅ **Fully wired** | Jafra Analyzer `/report` |
+| 8 | `get_jfr_summary` | ✅ **Fully wired** | Jafra Analyzer `/summary` |
+| 9 | `get_flame_graph` | 🔧 Stub | jafra-controller (TBD) |
 
 ---
 
-## 🚀 Integration Workflow
+## Source Files
 
-```
-Step 1: Read MCP_TOOL_QUICK_REFERENCE.md
-        ↓
-Step 2: Understand the workflow (alert → list → verify → start → poll → report)
-        ↓
-Step 3: Reference MCP_TOOL_CONTRACT_SPECIFICATION.md for details
-        ↓
-Step 4: Implement each tool according to spec
-        ↓
-Step 5: Test polling intervals (10-15s for get_recording)
-        ↓
-Step 6: Handle all documented error codes
-        ↓
-Step 7: Parse ProfilingReport JSON
-        ↓
-Step 8: Use 'observations' field for AI reasoning
-```
+| File | Purpose |
+|------|---------|
+| [`ProfilingModels.java`](src/main/java/io/causa/profiler/dto/ProfilingModels.java) | All DTOs: `JafraSummaryReport`, `JafraSummaryDocument`, `McpSummary`, `RecordingMetadata`, enums |
+| [`ProfilingTools.java`](src/main/java/io/causa/profiler/mcp/ProfilingTools.java) | All 9 `@Tool` methods |
+| [`ProfilerService.java`](src/main/java/io/causa/profiler/service/ProfilerService.java) | Service interface |
+| [`ProfilerServiceClient.java`](src/main/java/io/causa/profiler/service/ProfilerServiceClient.java) | Jafra Analyzer REST client + `summary_to_mcp.py` logic (Java port) |
+| [`ProfilingToolsTest.java`](src/test/java/io/causa/profiler/mcp/ProfilingToolsTest.java) | 16 unit tests covering all 9 tools |
+| [`smoke_test.py`](smoke_test.py) | End-to-end MCP handshake smoke test |
+| [`manifests/async-profiler-mcp-server-kind.yaml`](manifests/async-profiler-mcp-server-kind.yaml) | Kind deployment manifest |
 
 ---
 
-## ✅ Specification Coverage
+## Key Design Decisions
 
-- ✓ **8 tools** fully documented
-- ✓ **100+ error scenarios** covered
-- ✓ **Real-world examples** provided
-- ✓ **Polling strategy** defined (10-15s intervals, 10-15min timeout)
-- ✓ **Profile types** (CPU, MEMORY, LOCK, ALLOCATION, ALL)
-- ✓ **Status state machine** (QUEUED → RECORDING → ... → READY)
-- ✓ **JSON schema validation** for all requests/responses
-- ✓ **Error handling** with mitigation steps
-- ✓ **Backwards compatibility** notes
-- ✓ **Type safety** (all fields typed, nullable flags clear)
+**Why is `get_recording_report` now `(ns, pod, container, last)` instead of `(recording_id)`?**  
+The Jafra Analyzer doesn't expose a recording-ID-based report endpoint. It uses a time-window selector (`?last=5m`) against a namespace/pod/container key. The old `recording_id`-based signature was based on a fictional controller API that doesn't exist yet.
 
----
+**Why does `get_jfr_summary` exist as a separate tool?**  
+The Jafra Analyzer exposes two distinct endpoints: `/report` (JMC rule analysis) and `/summary` (raw JFR event statistics). The Python `summary_to_mcp.py` script in jafra-io transforms the `/summary` response into a structured payload well-suited for LLM reasoning. `get_jfr_summary` is the Java port of that transformation, delivered as a dedicated MCP tool.
 
-## 📤 Ready to Share
+**Why are `start_recording`, `stop_recording`, `get_recording`, `get_flame_graph` stubs?**  
+These tools will be wired to the jafra-controller once it exposes a recording lifecycle REST API. They are kept in the tool inventory today so agent implementations can be written against the full 9-tool surface without a breaking change later.
 
-**For Causa Engine Team:**
-- Start with MCP_TOOL_QUICK_REFERENCE.md
-- Deep-dive with MCP_TOOL_CONTRACT_SPECIFICATION.md
-- Use examples as templates for integration
-
-**For Profiling Controller Team:**
-- Share Dtos.java as contract
-- Reference MCP_TOOL_CONTRACT_SPECIFICATION.md for expected payloads
-- Use error codes to map back to REST responses
-
-**For Documentation:**
-- Both documents can be published to internal wiki
-- Quick reference good for onboarding new developers
-- Full specification good for maintenance and edge cases
-
----
-
-## 🔍 Key Sections by Use Case
-
-| Use Case | Document | Section |
-|----------|----------|---------|
-| Start integration | Quick Ref | "Quick Workflow" |
-| Implement polling | Quick Ref | "Polling Strategy" |
-| Handle errors | Quick Ref | "Error Handling" / Spec | "Error Codes per Tool" |
-| Parse report | Spec | "get_recording_report" output schema |
-| Flame graph analysis | Spec | "get_flame_graph" output schema |
-| State machine | Both | "Status Lifecycle" |
-| Example code | Quick Ref | "Example Causa Workflow" |
-| Exact payload format | Spec | "Example Request/Response" |
-
----
-
-## 📞 Questions?
-
-Refer to:
-1. **Quick Ref** for "what does this tool do?"
-2. **Spec** for "what exact format?" / "what errors?" / "what payload?"
-3. **README** for architecture and getting started
-4. **Dtos.java** for source-of-truth type definitions
-
----
-
-**Status: ✅ COMPLETE AND READY FOR PRODUCTION**
-
-Both teams (Causa Engine and Profiling Controller) have everything needed for successful integration.
+**`Dtos.java` → `ProfilingModels.java`**  
+Renamed for clarity. `ProfilingModels` communicates what the file contains (the full model layer for profiling) rather than just "DTOs".

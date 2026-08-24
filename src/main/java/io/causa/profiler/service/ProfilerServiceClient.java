@@ -339,9 +339,9 @@ public class ProfilerServiceClient implements ProfilerService {
 
         // Errors
         McpSummary.ErrorStats errStats = new McpSummary.ErrorStats();
-        errStats.count   = countOf(err);
-        errStats.classes = values(err, "thrownClass");
-        errStats.messages = values(err, "message");
+        errStats.count    = countOf(err);
+        errStats.classes  = values(err, "thrownClass");
+        errStats.messages = cappedValues(err, "message", 10);
         sig.errors = errStats;
 
         // Class loading
@@ -350,6 +350,15 @@ public class ProfilerServiceClient implements ProfilerService {
         clsStats.loadedClassCountSamples   = values(cls, "loadedClassCount");
         clsStats.unloadedClassCountSamples = values(cls, "unloadedClassCount");
         sig.classloading = clsStats;
+
+        // Metaspace failure detail — present only when failures were recorded
+        if (countOf(metaFail) > 0) {
+            McpSummary.MetaspaceFailureDetail mfd = new McpSummary.MetaspaceFailureDetail();
+            mfd.classLoaders = values(metaFail, "classLoader");
+            mfd.objectTypes  = values(metaFail, "metaspaceObjectType");
+            mfd.sizeB        = metric(metaFail, "size", 1.0);
+            sig.metaspaceFailureDetail = mfd;
+        }
 
         return sig;
     }
@@ -399,16 +408,26 @@ public class ProfilerServiceClient implements ProfilerService {
 
     /** Collect the distinct text values from a field, filtering garbled JMC internal refs. */
     private static List<String> values(JafraSummaryDocument.EventSummary ev, String fieldName) {
-        return cleanValues(ev, fieldName);
+        return cappedValues(ev, fieldName, Integer.MAX_VALUE);
     }
 
     private static List<String> cleanValues(JafraSummaryDocument.EventSummary ev, String fieldName) {
+        return cappedValues(ev, fieldName, Integer.MAX_VALUE);
+    }
+
+    /**
+     * Like {@link #values} but stops after {@code cap} entries.
+     * Matches the Python helper's {@code values(ev, field, cap=N)} overload.
+     */
+    private static List<String> cappedValues(
+            JafraSummaryDocument.EventSummary ev, String fieldName, int cap) {
         JafraSummaryDocument.FieldStats f = fieldOf(ev, fieldName);
         if (f == null || f.values == null) {
             return Collections.emptyList();
         }
         List<String> out = new ArrayList<>();
         for (String v : f.values) {
+            if (out.size() >= cap) break;
             if (v != null && !v.contains("StructTypes$JfrMethod@")) {
                 out.add(v);
             }

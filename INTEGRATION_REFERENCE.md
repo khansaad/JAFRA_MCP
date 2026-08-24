@@ -6,48 +6,55 @@
 
 | Property | Value |
 |---|---|
-| **Image** | `quay.io/khansaad/async-profiler-mcp-server:0.0.1` |
-| **Architectures** | `amd64`, `arm64` |
+| **Image** | `quay.io/khansaad/async-profiler-mcp-server:0.1.0` |
+| **Architecture** | `linux/amd64` |
 | **Base** | `eclipse-temurin:21-jre` |
-| **Transports** | stdio (default) · SSE (`/mcp/sse`) · Streamable HTTP (`/mcp`) |
-| **Port** | `8080` (OpenShift) · `8083` (Minikube, to avoid conflict) |
+| **Transports** | Streamable HTTP (`POST /mcp`) · SSE (`GET /mcp/sse`) · stdio |
+| **Port** | `8080` |
 | **Java** | 21 |
-| **Framework** | Quarkus 3.36.1 + `quarkus-mcp-server-stdio` 1.1.0 |
+| **Framework** | Quarkus 3.20 + quarkus-mcp-server |
 
 ---
 
 ## Transport Modes
 
-The server ships with **stdio enabled by default** (suitable for AI agents that spawn it as a subprocess).  
-To switch to **HTTP / SSE mode** for network deployment, set:
-
-```
-QUARKUS_MCP_SERVER_STDIO_ENABLED=false
-QUARKUS_HTTP_HOST_ENABLED=true
-```
-
-| Mode | When to use | Endpoint |
+| Mode | Endpoint | When to use |
 |---|---|---|
-| **stdio** (default) | AI agent spawns the server as a child process | stdin / stdout |
-| **SSE** | Network deployment; Causa connects over HTTP | `http://<host>:<port>/mcp/sse` |
-| **Streamable HTTP** | Network deployment; single HTTP request/response | `http://<host>:<port>/mcp` |
+| **Streamable HTTP** | `POST /mcp` | Default for network deployment (MCP spec §6.3) |
+| **SSE** | `GET /mcp/sse` | Older MCP clients using Server-Sent Events |
+| **stdio** | stdin / stdout | AI agent spawns the server as a child process |
+
+The MCP handshake requires three steps:
+
+```
+1. POST /mcp  {"method":"initialize",...}          → receive Mcp-Session-Id header
+2. POST /mcp  {"method":"notifications/initialized"} Accept: application/json, text/event-stream
+3. POST /mcp  {"method":"tools/list",...}           with Mcp-Session-Id header
+```
 
 ---
 
-## Probes
+## Health Probes
 
-TCP socket on port `8080` (OpenShift) or `8083` (Minikube).
+```
+GET /q/health/ready   → {"status":"UP"}
+GET /q/health/live    → {"status":"UP"}
+```
+
+Kubernetes probe config (already in `manifests/async-profiler-mcp-server-kind.yaml`):
 
 ```yaml
-livenessProbe:
-  tcpSocket:
-    port: 8080
-  initialDelaySeconds: 10
-  periodSeconds: 15
 readinessProbe:
-  tcpSocket:
-    port: 8080
+  httpGet:
+    path: /q/health/ready
+    port: http
   initialDelaySeconds: 5
+  periodSeconds: 5
+livenessProbe:
+  httpGet:
+    path: /q/health/live
+    port: http
+  initialDelaySeconds: 10
   periodSeconds: 10
 ```
 
@@ -55,75 +62,130 @@ readinessProbe:
 
 ## Port-forward
 
-**OpenShift:**
 ```bash
-kubectl port-forward deployment/async-profiler-mcp-server 8080:8080 -n <namespace>
-```
-
-**Minikube:**
-```bash
-kubectl port-forward service/async-profiler-mcp-server-service 8083:8083 -n monitoring
+# Kind / Kubernetes
+kubectl -n jafra-system port-forward svc/async-profiler-mcp-server 18081:8080
 ```
 
 ---
 
-## Required Environment Variables
+## Environment Variables
 
-These **must** be set in the manifest before deployment:
-
-| Variable | Required | Description | Example |
+| Variable | Required | Default | Description |
 |---|---|---|---|
-| `PROFILER_CONTROLLER_URL` | **Yes** | Base URL of the Profiling Controller backend — the service that owns JFR recording and analysis | `http://profiling-controller.profiling:8081` |
-| `PROFILER_DEFAULT_NAMESPACE` | No | Fallback Kubernetes namespace used when a caller omits `namespace`. Defaults to `default` | `production` |
-| `QUARKUS_HTTP_PORT` | No | Override the HTTP port. Only needed on Minikube to avoid conflicts. Defaults to `8080` | `8083` |
+| `JAFRA_ANALYZER_URL` | **Yes** | `http://localhost:8080` | Base URL of the Jafra Analyzer. Every `get_recording_report` and `get_jfr_summary` call is forwarded here. |
+| `PROFILER_DEFAULT_NAMESPACE` | No | `default` | Fallback Kubernetes namespace when a caller omits `namespace`. |
+| `QUARKUS_HTTP_PORT` | No | `8080` | Override the HTTP port. |
 
-> **`PROFILER_CONTROLLER_URL` is required.** The MCP server is a thin proxy — every tool call is forwarded to this URL. Without it the server will start but all tool calls will fail with a connection error.
+> **`JAFRA_ANALYZER_URL` is required.** Without it the server starts but `get_recording_report` and `get_jfr_summary` will fail with a connection error.
 
-### How to set in manifests
+### In-cluster DNS (Kind / Kubernetes)
 
-**OpenShift** — [`manifests/async-profiler-mcp-server-openshift.yaml`](manifests/async-profiler-mcp-server-openshift.yaml):
 ```yaml
 env:
-  - name: PROFILER_CONTROLLER_URL
-    value: "http://profiling-controller.profiling:8081"   # ← REPLACE with actual controller service DNS
-  - name: PROFILER_DEFAULT_NAMESPACE
-    value: "default"                                       # ← REPLACE if your pods are in a different namespace
-```
-
-**Minikube** — [`manifests/async-profiler-mcp-server-minikube.yaml`](manifests/async-profiler-mcp-server-minikube.yaml):
-```yaml
-env:
-  - name: PROFILER_CONTROLLER_URL
-    value: "http://<minikube-ip>:<controller-port>"        # ← REPLACE with minikube IP + controller NodePort
+  - name: JAFRA_ANALYZER_URL
+    value: "http://jafra-analyzer.jafra-system.svc.cluster.local:8080"
   - name: PROFILER_DEFAULT_NAMESPACE
     value: "default"
-  - name: QUARKUS_HTTP_PORT
-    value: "8083"
 ```
 
 ---
 
-## MCP Tools Exposed (8 tools)
+## MCP Tools (9 tools)
 
-| Tool | Arguments | Description |
-|---|---|---|
-| `list_profiled_pods` | `namespace` (optional) | Discover pods with profiler sidecar; returns `latestRecordingId` per pod |
-| `get_pod_jvm_status` | `pod_name`, `namespace` (optional) | Sidecar health + latest recording metadata |
-| `get_jvm_statistics` | `pod_name` | Live JVM snapshot: heap, threads, GC — no recording needed |
-| `start_recording` | `pod_name`, `duration_seconds` (optional), `profile_type` (optional) | Trigger a JFR recording; returns `recording_id` |
-| `stop_recording` | `recording_id` | Stop a recording early |
-| `get_recording` | `recording_id` | Poll recording status (`QUEUED→RECORDING→DOWNLOADING→ANALYSING→READY`) |
-| `get_recording_report` | `recording_id` | Full structured analysis report (call after status=READY) |
-| `get_flame_graph` | `recording_id`, `format` (`json`\|`svg`, optional, default `json`) | Flame graph as JSON tree or interactive SVG |
+| # | Tool | Status | Arguments | Description |
+|---|------|--------|-----------|-------------|
+| 1 | `list_profiled_pods` | ✅ Live | `namespace?` | Discover pods with profiler sidecar |
+| 2 | `get_pod_jvm_status` | ✅ Live | `pod_name`, `namespace?` | Sidecar health + latest recording metadata |
+| 3 | `get_jvm_statistics` | ✅ Live | `pod_name` | Live JVM snapshot: heap, threads, GC |
+| 4 | `start_recording` | 🔧 Stub | `pod_name`, `duration_seconds?`, `profile_type?` | Trigger a JFR recording |
+| 5 | `stop_recording` | 🔧 Stub | `recording_id` | Stop a recording early |
+| 6 | `get_recording` | 🔧 Stub | `recording_id` | Poll recording status |
+| 7 | `get_recording_report` | ✅ Live | `namespace?`, `pod`, `container`, `last?` | JMC rule findings for a pod/window |
+| 8 | `get_jfr_summary` | ✅ Live | `namespace?`, `pod`, `container`, `last?` | Compact LLM-ready event summary |
+| 9 | `get_flame_graph` | 🔧 Stub | `recording_id`, `format?` | Flame graph as JSON or SVG |
+
+**Stub tools** return a valid but placeholder response. They will be wired to the jafra-controller recording API once that is finalised.
+
+---
+
+## Jafra Analyzer Endpoints Called
+
+| MCP Tool | HTTP call |
+|---|---|
+| `get_recording_report` | `GET /api/v1/namespaces/{ns}/pods/{pod}/containers/{c}/report?last={last}` |
+| `get_jfr_summary` | `GET /api/v1/namespaces/{ns}/pods/{pod}/containers/{c}/summary?last={last}` |
+
+---
+
+## `get_jfr_summary` Response Structure
+
+The `get_jfr_summary` tool fetches the raw `JafraSummaryDocument` from the analyzer and transforms it into a compact `McpSummary` payload (equivalent to the Python `summary_to_mcp.py` script in the jafra-io repo):
+
+```
+McpSummary
+├── scope        — namespace, pod, container, recording window, file metadata
+├── environment  — JVM version/args, GC config (young/old collector), heap
+│                  settings, container CPU/memory limits, tick_hz
+└── signals
+    ├── cpu_throttled_time_ns, cpu_load_machine_pct, thread_cpu_user_pct
+    ├── context_switch_rate_hz
+    ├── wall_clock     — sample count, states (SLEEPING/RUNNABLE)
+    ├── gc             — count, pause_ns, collectors, causes, young/old breakdown
+    ├── heap           — used_b, committed_b, rss_b, container_memory_b, metaspace
+    ├── alloc_top_classes, alloc_size_b
+    ├── live_top_classes, live_alloc_size_b
+    ├── locks          — monitor_enter, monitor_wait, thread_park, native_lock
+    ├── deoptimization — count, reasons, actions, compilers
+    ├── vm_operations  — count, operations, duration_ns
+    ├── compiler       — compile_count, bailout_count, nmethods_size
+    ├── threads        — active, daemon, peak
+    ├── errors         — count, classes, messages
+    └── classloading   — count, loaded/unloaded samples
+```
+
+---
+
+## `get_recording_report` Response Structure
+
+Returns the raw `JafraSummaryReport` from the Jafra Analyzer — a map of JMC rule findings:
+
+```json
+{
+  "namespace": "default",
+  "pod": "auth-cache-6fcdc64b64-2cnw9",
+  "container": "auth-cache",
+  "generatedAt": "2026-08-24T...",
+  "findings": {
+    "VMOperations": {
+      "score": 100.0,
+      "name": "VMOperation Peak Duration",
+      "topic": "vm_operations",
+      "description": "There are long lasting blocking VM operations..."
+    },
+    "GcPauseRatio": {
+      "score": 91.9,
+      "name": "GC Pressure",
+      "topic": "heap",
+      "description": "..."
+    }
+  }
+}
+```
+
+Higher `score` = worse. Negative score = rule not applicable.
 
 ---
 
 ## Connect with MCP Inspector
 
 ```bash
-# Install once
 npm install -g @modelcontextprotocol/inspector
-
-# Connect (after port-forward or in-cluster)
-npx @modelcontextprotocol/inspector http://localhost:8080/mcp/
+npx @modelcontextprotocol/inspector http://localhost:18081/mcp/
 ```
+
+---
+
+## Source of truth for types
+
+All DTOs are defined in [`ProfilingModels.java`](src/main/java/io/causa/profiler/dto/ProfilingModels.java).
