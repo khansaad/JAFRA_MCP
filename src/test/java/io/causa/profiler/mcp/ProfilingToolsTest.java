@@ -1,6 +1,6 @@
 package io.causa.profiler.mcp;
 
-import io.causa.profiler.dto.Dtos.*;
+import io.causa.profiler.dto.ProfilingModels.*;
 import io.causa.profiler.service.ProfilerService;
 import io.quarkus.test.InjectMock;
 import io.quarkus.test.junit.QuarkusTest;
@@ -8,26 +8,28 @@ import org.junit.jupiter.api.Test;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.*;
 
 /**
- * Unit tests for all 8 MCP tools.
+ * Unit tests for all 9 MCP tools.
  *
  * ProfilerService is mocked — the tests verify that:
  *   a) the correct service method is called with the right arguments, and
  *   b) the tool returns the value from the service unchanged.
  *
- * Tool-name → Java-method mapping (per contract):
+ * Tool-name → Java-method mapping:
  *   list_profiled_pods   → listProfiledPods
  *   get_pod_jvm_status   → getPodJvmStatus
  *   get_jvm_statistics   → getJvmStatistics
- *   start_recording      → startRecording
- *   stop_recording       → stopRecording
- *   get_recording        → getRecording
- *   get_recording_report → getRecordingReport
- *   get_flame_graph      → getFlameGraph
+ *   start_recording      → startRecording       (stub — not yet wired to jafra-controller)
+ *   stop_recording       → stopRecording        (stub — not yet wired to jafra-controller)
+ *   get_recording        → getRecording         (stub — not yet wired to jafra-controller)
+ *   get_recording_report → getRecordingReport   (ns, pod, container, last)
+ *   get_jfr_summary      → getJfrSummary        (ns, pod, container, last)
+ *   get_flame_graph      → getFlameGraph        (stub — not yet wired to jafra-controller)
  */
 @QuarkusTest
 class ProfilingToolsTest {
@@ -88,24 +90,24 @@ class ProfilingToolsTest {
         verify(profilerService).getJvmStatistics("myapp-0");
     }
 
-    // ── 4. start_recording ─────────────────────────────────────────────────────
+    // ── 4. start_recording (stub) ──────────────────────────────────────────────
 
     @Test
     void startRecording_usesDefaultDurationAndTypeWhenNull() {
-        var meta = recordingMeta("rec-001", RecordingStatus.RECORDING);
-        when(profilerService.startRecording("myapp-0", 300, "CPU")).thenReturn(meta);
+        var stub = recordingMeta("rec-001", RecordingStatus.QUEUED);
+        when(profilerService.startRecording("myapp-0", 300, "CPU")).thenReturn(stub);
 
         var result = tools.startRecording("myapp-0", null, null);
 
         assertThat(result.recordingId).isEqualTo("rec-001");
-        assertThat(result.status).isEqualTo(RecordingStatus.RECORDING);
+        assertThat(result.status).isEqualTo(RecordingStatus.QUEUED);
         verify(profilerService).startRecording("myapp-0", 300, "CPU");
     }
 
     @Test
     void startRecording_respectsExplicitDurationAndType() {
-        var meta = recordingMeta("rec-002", RecordingStatus.RECORDING);
-        when(profilerService.startRecording("myapp-0", 120, "MEMORY")).thenReturn(meta);
+        when(profilerService.startRecording("myapp-0", 120, "MEMORY"))
+                .thenReturn(recordingMeta("rec-002", RecordingStatus.QUEUED));
 
         tools.startRecording("myapp-0", 120, "MEMORY");
 
@@ -114,21 +116,21 @@ class ProfilingToolsTest {
 
     @Test
     void startRecording_zeroDurationMeansRunUntilStop() {
-        var meta = recordingMeta("rec-003", RecordingStatus.RECORDING);
-        when(profilerService.startRecording("myapp-0", 0, "CPU")).thenReturn(meta);
+        when(profilerService.startRecording("myapp-0", 0, "CPU"))
+                .thenReturn(recordingMeta("rec-003", RecordingStatus.QUEUED));
 
         tools.startRecording("myapp-0", 0, null);
 
         verify(profilerService).startRecording("myapp-0", 0, "CPU");
     }
 
-    // ── 5. stop_recording ──────────────────────────────────────────────────────
+    // ── 5. stop_recording (stub) ───────────────────────────────────────────────
 
     @Test
     void stopRecording_setsTerminationReason() {
-        var meta = recordingMeta("rec-001", RecordingStatus.DOWNLOADING);
-        meta.terminationReason = TerminationReason.USER_REQUESTED;
-        when(profilerService.stopRecording("rec-001")).thenReturn(meta);
+        var stub = recordingMeta("rec-001", RecordingStatus.DOWNLOADING);
+        stub.terminationReason = TerminationReason.USER_REQUESTED;
+        when(profilerService.stopRecording("rec-001")).thenReturn(stub);
 
         var result = tools.stopRecording("rec-001");
 
@@ -136,71 +138,112 @@ class ProfilingToolsTest {
         verify(profilerService).stopRecording("rec-001");
     }
 
-    // ── 6. get_recording ──────────────────────────────────────────────────────
+    // ── 6. get_recording (stub) ────────────────────────────────────────────────
 
     @Test
     void getRecording_returnsAnalysingWhileProcessing() {
-        var meta = recordingMeta("rec-001", RecordingStatus.ANALYSING);
-        when(profilerService.getRecording("rec-001")).thenReturn(meta);
+        when(profilerService.getRecording("rec-001"))
+                .thenReturn(recordingMeta("rec-001", RecordingStatus.ANALYSING));
 
-        var result = tools.getRecording("rec-001");
-
-        assertThat(result.status).isEqualTo(RecordingStatus.ANALYSING);
+        assertThat(tools.getRecording("rec-001").status).isEqualTo(RecordingStatus.ANALYSING);
     }
 
     @Test
     void getRecording_returnsReadyWhenDone() {
-        var meta = recordingMeta("rec-001", RecordingStatus.READY);
-        when(profilerService.getRecording("rec-001")).thenReturn(meta);
+        when(profilerService.getRecording("rec-001"))
+                .thenReturn(recordingMeta("rec-001", RecordingStatus.READY));
 
-        var result = tools.getRecording("rec-001");
-
-        assertThat(result.status).isEqualTo(RecordingStatus.READY);
+        assertThat(tools.getRecording("rec-001").status).isEqualTo(RecordingStatus.READY);
     }
 
     @Test
     void getRecording_reflectsContainerOom() {
-        var meta = recordingMeta("rec-001", RecordingStatus.ERROR);
-        meta.terminationReason = TerminationReason.CONTAINER_OOM;
-        when(profilerService.getRecording("rec-001")).thenReturn(meta);
+        var stub = recordingMeta("rec-001", RecordingStatus.ERROR);
+        stub.terminationReason = TerminationReason.CONTAINER_OOM;
+        when(profilerService.getRecording("rec-001")).thenReturn(stub);
 
-        var result = tools.getRecording("rec-001");
-
-        assertThat(result.terminationReason).isEqualTo(TerminationReason.CONTAINER_OOM);
+        assertThat(tools.getRecording("rec-001").terminationReason)
+                .isEqualTo(TerminationReason.CONTAINER_OOM);
     }
 
     // ── 7. get_recording_report ────────────────────────────────────────────────
 
     @Test
-    void getRecordingReport_returnsFullReport() {
-        var report = new ProfilingReport();
-        report.podName = "myapp-0";
-        report.recordingId = "rec-001";
-        report.reportGeneratedAt = Instant.now();
+    void getRecordingReport_returnsFindings() {
+        var report = new JafraSummaryReport();
+        report.namespace   = "default";
+        report.pod         = "auth-cache-6fcdc64b64-2cnw9";
+        report.container   = "auth-cache";
+        report.generatedAt = "2026-08-21T07:05:33Z";
 
-        report.summary = new ProfilingReport.SummarySection();
-        report.summary.cpuUsagePercent  = 87.3;
-        report.summary.heapUsagePercent = 76.1;
-        report.summary.gcEventCount     = 42;
+        var finding = new JafraSummaryReport.AnalysisFinding();
+        finding.score       = 100.0;
+        finding.name        = "VMOperation Peak Duration";
+        finding.topic       = "vm_operations";
+        finding.description = "Long VM operations detected.";
+        report.findings = Map.of("VMOperations", finding);
 
-        report.cpu = new ProfilingReport.CpuSection();
-        var frame = new ProfilingReport.CpuSection.HotFrame();
-        frame.frameSignature = "com.example.RetainedHeap.retain";
-        frame.sampleCount    = 1200;
-        frame.percentOfTotal = 34.5;
-        report.cpu.topFrames = List.of(frame);
+        when(profilerService.getRecordingReport("default", "auth-cache-6fcdc64b64-2cnw9", "auth-cache", "5m"))
+                .thenReturn(report);
 
-        when(profilerService.getRecordingReport("rec-001")).thenReturn(report);
+        var result = tools.getRecordingReport("default", "auth-cache-6fcdc64b64-2cnw9", "auth-cache", "5m");
 
-        var result = tools.getRecordingReport("rec-001");
-
-        assertThat(result.summary.cpuUsagePercent).isEqualTo(87.3);
-        assertThat(result.cpu.topFrames).hasSize(1);
-        assertThat(result.cpu.topFrames.get(0).frameSignature)
-                .isEqualTo("com.example.RetainedHeap.retain");
+        assertThat(result.namespace).isEqualTo("default");
+        assertThat(result.findings).containsKey("VMOperations");
+        assertThat(result.findings.get("VMOperations").score).isEqualTo(100.0);
+        verify(profilerService).getRecordingReport("default", "auth-cache-6fcdc64b64-2cnw9", "auth-cache", "5m");
     }
 
-    // ── 8. get_flame_graph ─────────────────────────────────────────────────────
+    @Test
+    void getRecordingReport_nullNamespaceDelegatesAsNull() {
+        when(profilerService.getRecordingReport(null, "myapp-0", "myapp", "5m"))
+                .thenReturn(new JafraSummaryReport());
+
+        tools.getRecordingReport(null, "myapp-0", "myapp", "5m");
+
+        verify(profilerService).getRecordingReport(null, "myapp-0", "myapp", "5m");
+    }
+
+    // ── 8. get_jfr_summary ─────────────────────────────────────────────────────
+
+    @Test
+    void getJfrSummary_returnsCompactPayload() {
+        var summary = new McpSummary();
+
+        var scope = new McpSummary.ScopeBlock();
+        scope.namespace = "default";
+        scope.pod       = "auth-cache-6fcdc64b64-2cnw9";
+        scope.container = "auth-cache";
+        summary.scope = scope;
+
+        var env = new McpSummary.EnvironmentBlock();
+        var jvmInfo = new McpSummary.JvmInfo();
+        jvmInfo.jvmName    = "OpenJDK 64-Bit Server VM";
+        jvmInfo.jvmVersion = "21.0.10+7-LTS";
+        env.jvm = jvmInfo;
+        summary.environment = env;
+
+        when(profilerService.getJfrSummary("default", "auth-cache-6fcdc64b64-2cnw9", "auth-cache", "5m"))
+                .thenReturn(summary);
+
+        var result = tools.getJfrSummary("default", "auth-cache-6fcdc64b64-2cnw9", "auth-cache", "5m");
+
+        assertThat(result.scope.namespace).isEqualTo("default");
+        assertThat(result.environment.jvm.jvmName).isEqualTo("OpenJDK 64-Bit Server VM");
+        verify(profilerService).getJfrSummary("default", "auth-cache-6fcdc64b64-2cnw9", "auth-cache", "5m");
+    }
+
+    @Test
+    void getJfrSummary_nullLastIsPassedThrough() {
+        when(profilerService.getJfrSummary("default", "myapp-0", "myapp", null))
+                .thenReturn(new McpSummary());
+
+        tools.getJfrSummary("default", "myapp-0", "myapp", null);
+
+        verify(profilerService).getJfrSummary("default", "myapp-0", "myapp", null);
+    }
+
+    // ── 9. get_flame_graph (stub) ──────────────────────────────────────────────
 
     @Test
     void getFlameGraph_defaultsToJson() {

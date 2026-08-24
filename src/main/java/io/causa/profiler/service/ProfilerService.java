@@ -1,21 +1,19 @@
 package io.causa.profiler.service;
 
-import io.causa.profiler.dto.Dtos.*;
+import io.causa.profiler.dto.ProfilingModels.*;
 
 import java.util.List;
 
 /**
- * Contract between the MCP tool layer and the Profiling Controller backend.
+ * Contract between the MCP tool layer and the Jafra Analyzer / Controller backend.
  *
- * The controller is responsible for:
- *   - Sidecar injection lifecycle
- *   - Attaching to the target JVM (SYS_PTRACE or jcmd fallback)
- *   - Driving async-profiler to generate a JFR recording
- *   - Downloading the JFR file from the pod
- *   - Parsing and analysing the JFR file
- *   - Storing the resulting report and serving it through the REST API below
+ * The Jafra stack owns:
+ *   - sidecar injection (jafra-controller / jafra-agent)
+ *   - JFR streaming from the target JVM
+ *   - Recording catalog and time-window selection (jafra-analyzer)
+ *   - JMC rule analysis and JFR event summarisation (jafra-analyzer)
  *
- * The MCP server only calls this interface; it knows nothing about async-profiler
+ * This MCP server only calls this interface; it knows nothing about async-profiler
  * or JFR internals.
  */
 public interface ProfilerService {
@@ -48,7 +46,10 @@ public interface ProfilerService {
      */
     JvmStatistics getJvmStatistics(String podName);
 
-    // ── Recording lifecycle ────────────────────────────────────────────────────
+    // ── Recording lifecycle (TODO: wire to jafra-controller) ──────────────────
+    // These methods are declared here and exposed as MCP tools today.
+    // Implementations return stub responses until the jafra-controller
+    // recording REST API is finalised and integrated.
 
     /**
      * Start a JFR recording on the target pod.
@@ -57,9 +58,7 @@ public interface ProfilerService {
      *
      * @param podName         Kubernetes pod name
      * @param durationSeconds Profiling duration. 0 means "run until explicitly stopped".
-     *                        Default 300 (5 min).
      * @param profileType     CPU | MEMORY | LOCK | ALLOCATION | ALL
-     * @return Recording metadata including the {@code recordingId} to use in subsequent calls
      */
     RecordingMetadata startRecording(String podName, int durationSeconds, String profileType);
 
@@ -69,7 +68,6 @@ public interface ProfilerService {
      * <p>MCP tool: {@code stop_recording}
      *
      * @param recordingId The recording ID returned by {@link #startRecording}
-     * @return Updated recording metadata
      */
     RecordingMetadata stopRecording(String recordingId);
 
@@ -79,21 +77,8 @@ public interface ProfilerService {
      * <p>MCP tool: {@code get_recording}
      *
      * @param recordingId The recording ID
-     * @return Current recording metadata including status
      */
     RecordingMetadata getRecording(String recordingId);
-
-    // ── Analysis ───────────────────────────────────────────────────────────────
-
-    /**
-     * Return the structured profiling report for a completed recording.
-     *
-     * <p>MCP tool: {@code get_recording_report}
-     *
-     * @param recordingId The recording ID
-     * @return Full structured report: CPU hotspots, memory sites, GC pauses, thread breakdown
-     */
-    ProfilingReport getRecordingReport(String recordingId);
 
     /**
      * Return flame-graph data for a completed recording.
@@ -102,7 +87,35 @@ public interface ProfilerService {
      *
      * @param recordingId The recording ID
      * @param format      "svg" for an interactive HTML page, "json" for a hotspot tree
-     * @return Flame-graph content as a string (SVG XML or JSON)
      */
     String getFlameGraph(String recordingId, String format);
+
+    // ── Analysis (Jafra Analyzer endpoints) ───────────────────────────────────
+
+    /**
+     * Fetch the JMC rule-based analysis report for the given container/window.
+     * Calls {@code GET /api/v1/namespaces/{ns}/pods/{pod}/containers/{container}/report}.
+     *
+     * <p>MCP tool: {@code get_recording_report}
+     *
+     * @param namespace Kubernetes namespace
+     * @param pod       Kubernetes pod name
+     * @param container Container name within the pod
+     * @param last      Time window shorthand, e.g. {@code "5m"} (optional)
+     */
+    JafraSummaryReport getRecordingReport(String namespace, String pod, String container, String last);
+
+    /**
+     * Fetch the raw JFR event summary and convert it to the MCP-friendly
+     * {@link McpSummary} payload.
+     * Calls {@code GET /api/v1/namespaces/{ns}/pods/{pod}/containers/{container}/summary}.
+     *
+     * <p>MCP tool: {@code get_jfr_summary}
+     *
+     * @param namespace Kubernetes namespace
+     * @param pod       Kubernetes pod name
+     * @param container Container name within the pod
+     * @param last      Time window shorthand, e.g. {@code "5m"} (optional)
+     */
+    McpSummary getJfrSummary(String namespace, String pod, String container, String last);
 }
