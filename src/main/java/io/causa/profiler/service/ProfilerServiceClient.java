@@ -1,8 +1,10 @@
 package io.causa.profiler.service;
 
 import io.causa.profiler.dto.ProfilingModels.*;
+import io.quarkiverse.mcp.server.ToolCallException;
 import io.quarkus.logging.Log;
 import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.ws.rs.WebApplicationException;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.eclipse.microprofile.rest.client.inject.RegisterRestClient;
 import org.eclipse.microprofile.rest.client.inject.RestClient;
@@ -15,6 +17,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.stream.Collectors;
 
 /**
  * REST client that talks to the Jafra Analyzer backend.
@@ -40,12 +43,31 @@ public class ProfilerServiceClient implements ProfilerService {
     @ConfigProperty(name = "profiler.controller.default-namespace", defaultValue = "default")
     String defaultNamespace;
 
-    // ── Pod discovery (controller stubs — wire up when controller API is confirmed) ──
+    // ── Pod discovery — wired to Jafra Analyzer /api/v1/recordings ───────────
 
     @Override
     public List<ProfiledPodMetadata> listProfiledPods() {
-        Log.debug("listProfiledPods — not yet wired to jafra-controller");
-        return Collections.emptyList();
+        Log.debug("listProfiledPods — calling jafra-analyzer /api/v1/recordings");
+        RecordingsListResponse resp = api.recordings();
+        if (resp == null || resp.workloads == null) {
+            return Collections.emptyList();
+        }
+        List<ProfiledPodMetadata> result = new ArrayList<>();
+        for (WorkloadRecordings w : resp.workloads) {
+            ProfiledPodMetadata meta = new ProfiledPodMetadata();
+            meta.namespace       = w.namespace;
+            meta.podName         = w.pod;
+            meta.profilerStatus  = "READY";
+            if (w.recordings != null && !w.recordings.isEmpty()) {
+                WorkloadRecordings.RecordingFile latest =
+                        w.recordings.get(w.recordings.size() - 1);
+                meta.latestRecordingId = latest.filename;
+                meta.lastProfiledAt    = latest.end != null
+                        ? java.time.Instant.parse(latest.end) : null;
+            }
+            result.add(meta);
+        }
+        return result;
     }
 
     @Override
@@ -108,15 +130,54 @@ public class ProfilerServiceClient implements ProfilerService {
     public JafraSummaryReport getRecordingReport(String namespace, String pod, String container, String last) {
         String ns = Objects.requireNonNullElse(namespace, defaultNamespace);
         Log.infof("getRecordingReport ns=%s pod=%s container=%s last=%s", ns, pod, container, last);
-        return api.report(ns, pod, container, last);
+        try {
+            return api.report(ns, pod, container, last);
+        } catch (WebApplicationException e) {
+            if (e.getResponse().getStatus() == 404) {
+                throw new ToolCallException(build404Message(ns, pod, container));
+            }
+            throw e;
+        }
     }
 
     @Override
     public McpSummary getJfrSummary(String namespace, String pod, String container, String last) {
         String ns = Objects.requireNonNullElse(namespace, defaultNamespace);
         Log.infof("getJfrSummary ns=%s pod=%s container=%s last=%s", ns, pod, container, last);
-        JafraSummaryDocument doc = api.summary(ns, pod, container, last);
-        return toMcpSummary(doc);
+        try {
+            JafraSummaryDocument doc = api.summary(ns, pod, container, last);
+            return toMcpSummary(doc);
+        } catch (WebApplicationException e) {
+            if (e.getResponse().getStatus() == 404) {
+                throw new ToolCallException(build404Message(ns, pod, container));
+            }
+            throw e;
+        }
+    }
+
+    /**
+     * Builds a helpful error message for 404s that lists every pod currently
+     * known to the analyzer, so the caller knows exactly what to use.
+     */
+    private String build404Message(String namespace, String pod, String container) {
+        String available;
+        try {
+            RecordingsListResponse resp = api.recordings();
+            if (resp != null && resp.workloads != null && !resp.workloads.isEmpty()) {
+                available = resp.workloads.stream()
+                        .map(w -> "  • " + w.namespace + " / " + w.pod + " / " + w.container)
+                        .collect(Collectors.joining("\n"));
+            } else {
+                available = "  (no workloads found in the analyzer yet)";
+            }
+        } catch (Exception ex) {
+            available = "  (could not retrieve workload list: " + ex.getMessage() + ")";
+        }
+        return String.format(
+                "Pod not found in Jafra Analyzer: namespace=%s pod=%s container=%s%n" +
+                "Available workloads:%n%s%n" +
+                "Tip: call list_profiled_pods to see the current list before calling this tool.",
+                namespace, pod, container, available);
     }
 
     //  Pulls well-known JDK event types out of the raw
@@ -494,6 +555,10 @@ public class ProfilerServiceClient implements ProfilerService {
     @Produces(MediaType.APPLICATION_JSON)
     @Consumes(MediaType.APPLICATION_JSON)
     public interface JafraAnalyzerApi {
+
+        @GET
+        @Path("/recordings")
+        RecordingsListResponse recordings();
 
         @GET
         @Path("/namespaces/{namespace}/pods/{pod}/containers/{container}/report")

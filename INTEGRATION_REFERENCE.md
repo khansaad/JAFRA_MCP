@@ -48,14 +48,16 @@ readinessProbe:
   httpGet:
     path: /q/health/ready
     port: http
-  initialDelaySeconds: 5
+  initialDelaySeconds: 35   # JVM startup in Kind can take 30+ s
   periodSeconds: 5
+  failureThreshold: 3
 livenessProbe:
   httpGet:
     path: /q/health/live
     port: http
-  initialDelaySeconds: 10
+  initialDelaySeconds: 45
   periodSeconds: 10
+  failureThreshold: 3
 ```
 
 ---
@@ -93,17 +95,17 @@ env:
 
 ## MCP Tools (9 tools)
 
-| # | Tool | Status | Arguments | Description |
-|---|------|--------|-----------|-------------|
-| 1 | `list_profiled_pods` | ✅ Live | `namespace?` | Discover pods with profiler sidecar |
-| 2 | `get_pod_jvm_status` | ✅ Live | `pod_name`, `namespace?` | Sidecar health + latest recording metadata |
-| 3 | `get_jvm_statistics` | ✅ Live | `pod_name` | Live JVM snapshot: heap, threads, GC |
-| 4 | `start_recording` | 🔧 Stub | `pod_name`, `duration_seconds?`, `profile_type?` | Trigger a JFR recording |
-| 5 | `stop_recording` | 🔧 Stub | `recording_id` | Stop a recording early |
-| 6 | `get_recording` | 🔧 Stub | `recording_id` | Poll recording status |
-| 7 | `get_recording_report` | ✅ Live | `namespace?`, `pod`, `container`, `last?` | JMC rule findings for a pod/window |
-| 8 | `get_jfr_summary` | ✅ Live | `namespace?`, `pod`, `container`, `last?` | Compact LLM-ready event summary |
-| 9 | `get_flame_graph` | 🔧 Stub | `recording_id`, `format?` | Flame graph as JSON or SVG |
+| # | Tool                   | Status  | Arguments                                        | Description                                          |
+|---|------------------------|---------|--------------------------------------------------|------------------------------------------------------|
+| 1 | `list_profiled_pods`   | ✅ Live  | `namespace?`                                     | Lists all pods with JFR recordings from the analyzer |
+| 2 | `get_pod_jvm_status`   | ✅ Live  | `pod_name`, `namespace?`                         | Sidecar health + latest recording metadata           |
+| 3 | `get_jvm_statistics`   | ✅ Live  | `pod_name`                                       | Live JVM snapshot: heap, threads, GC                 |
+| 4 | `get_recording_report` | ✅ Live  | `namespace?`, `pod`, `container`, `last?`        | JMC rule findings for a pod/window                   |
+| 5 | `get_jfr_summary`      | ✅ Live  | `namespace?`, `pod`, `container`, `last?`        | Compact LLM-ready event summary                      |
+| 6 | `start_recording`      | 🔧 Stub | `pod_name`, `duration_seconds?`, `profile_type?` | Trigger a JFR recording                              |
+| 7 | `stop_recording`       | 🔧 Stub | `recording_id`                                   | Stop a recording early                               |
+| 8 | `get_recording`        | 🔧 Stub | `recording_id`                                   | Poll recording status                                |
+| 9 | `get_flame_graph`      | 🔧 Stub | `recording_id`, `format?`                        | Flame graph as JSON or SVG                           |
 
 **Stub tools** return a valid but placeholder response. They will be wired to the jafra-controller recording API once that is finalised.
 
@@ -111,10 +113,13 @@ env:
 
 ## Jafra Analyzer Endpoints Called
 
-| MCP Tool | HTTP call |
-|---|---|
-| `get_recording_report` | `GET /api/v1/namespaces/{ns}/pods/{pod}/containers/{c}/report?last={last}` |
-| `get_jfr_summary` | `GET /api/v1/namespaces/{ns}/pods/{pod}/containers/{c}/summary?last={last}` |
+| MCP Tool               | HTTP call                                                                   |
+|------------------------|-----------------------------------------------------------------------------|
+| `list_profiled_pods`   | `GET /api/v1/recordings`                                                    |
+| `get_recording_report` | `GET /api/v1/namespaces/{ns}/pods/{pod}/containers/{c}/report?last={last}`  |
+| `get_jfr_summary`      | `GET /api/v1/namespaces/{ns}/pods/{pod}/containers/{c}/summary?last={last}` |
+
+> **404 handling:** `get_recording_report` and `get_jfr_summary` catch a 404 response and return `isError: true` with a message that lists every workload currently registered in the analyzer and instructs the caller to use `list_profiled_pods` to discover the correct pod name.
 
 ---
 
@@ -135,12 +140,14 @@ McpSummary
     ├── heap           — used_b, committed_b, rss_b, container_memory_b, metaspace
     ├── alloc_top_classes, alloc_size_b
     ├── live_top_classes, live_alloc_size_b
+    ├── metaspace_failures             — count (omitted when 0)
+    ├── metaspace_failure_detail       — classLoaders, objectTypes, size_b (present only when count > 0)
     ├── locks          — monitor_enter, monitor_wait, thread_park, native_lock
     ├── deoptimization — count, reasons, actions, compilers
     ├── vm_operations  — count, operations, duration_ns
     ├── compiler       — compile_count, bailout_count, nmethods_size
     ├── threads        — active, daemon, peak
-    ├── errors         — count, classes, messages
+    ├── errors         — count, classes, messages (capped at 10)
     └── classloading   — count, loaded/unloaded samples
 ```
 

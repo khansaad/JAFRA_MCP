@@ -7,17 +7,17 @@
 
 ## Tools at a Glance
 
-| # | Tool | Status | Input | Output | When |
-|---|------|--------|-------|--------|------|
-| 1 | `list_profiled_pods` | ✅ Live | `namespace?` | Pod list | Discovery |
-| 2 | `get_pod_jvm_status` | ✅ Live | `pod, namespace?` | Status | Pre-check |
-| 3 | `get_jvm_statistics` | ✅ Live | `pod` | Live stats | Quick snapshot |
-| 4 | `start_recording` | 🔧 Stub | `pod, duration?, type?` | RecordingMetadata | On alert |
-| 5 | `stop_recording` | 🔧 Stub | `recording_id` | RecordingMetadata | Alert resolves |
-| 6 | `get_recording` | 🔧 Stub | `recording_id` | RecordingMetadata | Poll every 10–15s |
-| 7 | `get_recording_report` | ✅ Live | `ns?, pod, container, last?` | JMC findings map | Analysis |
-| 8 | `get_jfr_summary` | ✅ Live | `ns?, pod, container, last?` | McpSummary | Analysis |
-| 9 | `get_flame_graph` | 🔧 Stub | `recording_id, format?` | SVG \| JSON | Visualization |
+| # | Tool                   | Status  | Input                        | Output            | When                            |
+|---|------------------------|---------|------------------------------|-------------------|---------------------------------|
+| 1 | `list_profiled_pods`   | ✅ Live  | `namespace?`                 | Pod list          | Discovery — **call this first** |
+| 2 | `get_pod_jvm_status`   | ✅ Live  | `pod, namespace?`            | Status            | Pre-check                       |
+| 3 | `get_jvm_statistics`   | ✅ Live  | `pod`                        | Live stats        | Quick snapshot                  |
+| 4 | `get_recording_report` | ✅ Live  | `ns?, pod, container, last?` | JMC findings map  | Analysis                        |
+| 5 | `get_jfr_summary`      | ✅ Live  | `ns?, pod, container, last?` | McpSummary        | Analysis                        |
+| 6 | `start_recording`      | 🔧 Stub | `pod, duration?, type?`      | RecordingMetadata | On alert                        |
+| 7 | `stop_recording`       | 🔧 Stub | `recording_id`               | RecordingMetadata | Alert resolves                  |
+| 8 | `get_recording`        | 🔧 Stub | `recording_id`               | RecordingMetadata | Poll every 10–15s               |
+| 9 | `get_flame_graph`      | 🔧 Stub | `recording_id, format?`      | SVG \| JSON       | Visualization                   |
 
 > **Stub tools** return a valid placeholder response. They will be wired to the jafra-controller recording API once that is finalised.
 
@@ -26,6 +26,9 @@
 ## Current Workflow (live tools)
 
 ```
+0. list_profiled_pods()
+   → discover available pods and their correct names
+
 1. get_jfr_summary(ns, pod, container, last="5m")
    → broad performance overview: CPU, GC, heap, locks, errors
 
@@ -34,6 +37,8 @@
 
 3. Correlate findings → Root Cause Analysis
 ```
+
+> **Tip:** Always call `list_profiled_pods` first to get the exact pod name. Passing a wrong pod name to `get_recording_report` or `get_jfr_summary` returns `isError: true` with the correct pod names listed in the message.
 
 ## Future Workflow (once stub tools are wired)
 
@@ -62,7 +67,7 @@ Correlate with metrics → Root Cause Analysis
 
 ### 1. `list_profiled_pods` ✅
 
-Discover pods with an async-profiler sidecar.
+Lists all pods that have JFR recordings stored in the Jafra Analyzer. **Call this first** to discover the correct `pod` and `container` values before calling `get_recording_report` or `get_jfr_summary`.
 
 **Input:**
 ```json
@@ -71,7 +76,13 @@ Discover pods with an async-profiler sidecar.
 
 **Output:**
 ```json
-[{ "podName": "auth-cache-…", "namespace": "default", "profilerStatus": "READY" }]
+[{
+  "podName": "auth-cache-6fcdc64b64-2cnw9",
+  "namespace": "default",
+  "profilerStatus": "READY",
+  "latestRecordingId": "profile-941.jfr",
+  "lastProfiledAt": "2026-08-25T05:50:24Z"
+}]
 ```
 
 ---
@@ -175,6 +186,8 @@ QUEUED → RECORDING → DOWNLOADING → ANALYSING → READY → DELIVERED
 ### 7. `get_recording_report` ✅
 
 JMC rule-based findings for a pod/time window. Calls the Jafra Analyzer `/report` endpoint.
+
+> **If the pod is not found**, the tool returns `isError: true` with a message listing all available workloads and a tip to call `list_profiled_pods` first — not a generic JSON-RPC error.
 
 **Input:**
 ```json
@@ -297,18 +310,27 @@ Flame graph for a completed recording.
 
 ## Error Handling
 
-All errors follow the JSON-RPC error envelope:
+**Pod not found (404)** — `get_recording_report` and `get_jfr_summary` return a tool-level error (`isError: true`) instead of a generic JSON-RPC error. The message includes the available workloads:
+
+```json
+{
+  "result": {
+    "isError": true,
+    "content": [{
+      "type": "text",
+      "text": "Pod not found in Jafra Analyzer: namespace=default pod=wrong-pod container=auth-cache\nAvailable workloads:\n  • default / auth-cache-6fcdc64b64-2cnw9 / auth-cache\nTip: call list_profiled_pods to see the current list before calling this tool."
+    }]
+  }
+}
+```
+
+**Other errors** follow the standard JSON-RPC error envelope:
 
 ```json
 {
   "error": {
     "code": -32603,
-    "message": "Internal error",
-    "data": {
-      "errorCode": "SPECIFIC_CODE",
-      "message": "Human-readable message",
-      "timestamp": "2026-08-24T…"
-    }
+    "message": "Internal error"
   }
 }
 ```
@@ -317,10 +339,10 @@ All errors follow the JSON-RPC error envelope:
 
 ## Polling Strategy (for stub tools, when wired)
 
-| Operation | Interval | Timeout |
-|-----------|----------|---------|
-| `get_recording` | 10–15 s | 10–15 min |
-| `get_jvm_statistics` (monitoring) | 5–10 s | continuous |
+| Operation                         | Interval | Timeout    |
+|-----------------------------------|----------|------------|
+| `get_recording`                   | 10–15 s  | 10–15 min  |
+| `get_jvm_statistics` (monitoring) | 5–10 s   | continuous |
 
 ---
 

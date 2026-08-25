@@ -6,8 +6,8 @@ MCP server that exposes JFR profiling data from Kubernetes JVM pods to an LLM ag
 
 1. **Exposes 9 MCP tools** so an agent can discover pods, trigger/monitor recordings, and retrieve JFR analysis from any pod in the cluster.
 2. **Delegates analysis** to the [Jafra Analyzer](https://github.com/causa-ai-hub/jafra) backend via a clean REST API — the MCP server has zero knowledge of JFR internals.
-3. **Live tools (5):** `list_profiled_pods`, `get_pod_jvm_status`, `get_jvm_statistics`, `get_recording_report`, `get_jfr_summary`.
-4. **Stub tools (4):** `start_recording`, `stop_recording`, `get_recording`, `get_flame_graph` — defined and advertised today; will be wired to the jafra-controller once its recording API is finalised.
+3. **Live tools (6):** `list_profiled_pods`, `get_pod_jvm_status`, `get_jvm_statistics`, `get_recording_report`, `get_jfr_summary` (all five wired to Jafra Analyzer — `list_profiled_pods` now calls `GET /api/v1/recordings`).
+4. **Stub tools (3):** `start_recording`, `stop_recording`, `get_recording`, `get_flame_graph` — defined and advertised today; will be wired to the jafra-controller once its recording API is finalised.
 
 ## Architecture
 
@@ -18,7 +18,8 @@ LLM Agent
 async-profiler-mcp-server   ← this repo
     │  REST
     ▼
-Jafra Analyzer   (GET /api/v1/namespaces/{ns}/pods/{pod}/containers/{c}/report)
+Jafra Analyzer   (GET /api/v1/recordings)
+    │            (GET /api/v1/namespaces/{ns}/pods/{pod}/containers/{c}/report)
     │            (GET /api/v1/namespaces/{ns}/pods/{pod}/containers/{c}/summary)
     ▼
 Jafra Agent (DaemonSet — streams JFR chunks from every node)
@@ -37,20 +38,20 @@ Jafra Agent (DaemonSet — streams JFR chunks from every node)
 
 | # | Tool                   | Status  | What it does                                                                    |
 |---|------------------------|---------|---------------------------------------------------------------------------------|
-| 1 | `list_profiled_pods`   | ✅ Live  | Discover pods with an async-profiler sidecar                                    |
+| 1 | `list_profiled_pods`   | ✅ Live  | Lists all pods with JFR recordings — calls `GET /api/v1/recordings`             |
 | 2 | `get_pod_jvm_status`   | ✅ Live  | Profiler readiness + latest recording info                                      |
 | 3 | `get_jvm_statistics`   | ✅ Live  | Live heap / thread / GC snapshot (no recording needed)                          |
-| 4 | `start_recording`      | 🔧 Stub | Trigger a JFR recording — wired to jafra-controller when recording API is ready |
-| 5 | `stop_recording`       | 🔧 Stub | Stop an in-progress recording early                                             |
-| 6 | `get_recording`        | 🔧 Stub | Poll recording status: `QUEUED → RECORDING → ANALYSING → READY`                 |
-| 7 | `get_recording_report` | ✅ Live  | JMC rule-based findings for a pod/time window (calls `/report`)                 |
-| 8 | `get_jfr_summary`      | ✅ Live  | Compact LLM-ready JFR event summary (calls `/summary`)                          |
+| 4 | `get_recording_report` | ✅ Live  | JMC rule-based findings for a pod/time window (calls `/report`)                 |
+| 5 | `get_jfr_summary`      | ✅ Live  | Compact LLM-ready JFR event summary (calls `/summary`)                          |
+| 6 | `start_recording`      | 🔧 Stub | Trigger a JFR recording — wired to jafra-controller when recording API is ready |
+| 7 | `stop_recording`       | 🔧 Stub | Stop an in-progress recording early                                             |
+| 8 | `get_recording`        | 🔧 Stub | Poll recording status: `QUEUED → RECORDING → ANALYSING → READY`                 |
 | 9 | `get_flame_graph`      | 🔧 Stub | Flame graph as SVG or JSON — wired to jafra-controller when ready               |
 
 ## Typical agent flow (current)
 
 ```
-1. list_profiled_pods()                               → find pods being profiled
+1. list_profiled_pods()                               → find pods with JFR recordings
 2. get_jfr_summary(ns, pod, container, last="5m")     → broad performance overview
    • scope       — recording window, file metadata
    • environment — JVM version, GC config, heap/container limits
@@ -65,12 +66,17 @@ Jafra Agent (DaemonSet — streams JFR chunks from every node)
 ## Jafra Analyzer REST API (live endpoints)
 
 ```
+GET /api/v1/recordings
+    → RecordingsListResponse  (all workloads with JFR recordings — used by list_profiled_pods)
+
 GET /api/v1/namespaces/{ns}/pods/{pod}/containers/{container}/report?last=5m
     → JafraSummaryReport  (JMC rule-based findings keyed by rule ID)
 
 GET /api/v1/namespaces/{ns}/pods/{pod}/containers/{container}/summary?last=5m
     → JafraSummaryDocument  (raw JFR event statistics, transformed to McpSummary)
 ```
+
+> **404 error handling:** If `pod` is not found in the analyzer, `get_recording_report` and `get_jfr_summary` return `isError: true` with an actionable message listing all available workloads and a tip to call `list_profiled_pods` first.
 
 All request/response types are defined in [`ProfilingModels.java`](src/main/java/io/causa/profiler/dto/ProfilingModels.java).
 
@@ -128,5 +134,5 @@ async-profiler-mcp-server/
     │       └── ProfilerServiceClient.java    ← Jafra Analyzer REST client +
     │                                            summary_to_mcp.py logic (Java port)
     └── test/java/io/causa/profiler/mcp/
-        └── ProfilingToolsTest.java           ← 16 unit tests (all 9 tools, mocked service)
+        └── ProfilingToolsTest.java           ← 19 unit tests (all 9 tools, mocked service)
 ```

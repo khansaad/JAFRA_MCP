@@ -93,11 +93,10 @@ podman build --platform linux/amd64 \
 ### Step 2: Load into Kind
 
 ```bash
-podman save quay.io/khansaad/async-profiler-mcp-server:0.1.0 | \
-  kind load docker-archive /dev/stdin --name jafra
-# or
 kind load docker-image quay.io/khansaad/async-profiler-mcp-server:0.1.0 --name jafra
 ```
+
+> **Note:** When updating an existing tag, always use a new tag (e.g. `0.1.0` → `0.1.2`) before loading into Kind. If you reuse a tag, the node may serve the cached layer and the pod will run the old image even after rollout.
 
 ### Step 3: Deploy
 

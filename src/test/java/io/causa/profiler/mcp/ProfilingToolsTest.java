@@ -10,7 +10,10 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 
+import io.quarkiverse.mcp.server.ToolCallException;
+
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.*;
 
 /**
@@ -56,6 +59,37 @@ class ProfilingToolsTest {
         assertThat(result).hasSize(1);
         assertThat(result.get(0).podName).isEqualTo("myapp-0");
         verify(profilerService).listProfiledPods();
+    }
+
+    @Test
+    void listProfiledPods_returnsEmptyListWhenNoneRegistered() {
+        when(profilerService.listProfiledPods()).thenReturn(List.of());
+
+        var result = tools.listProfiledPods("default");
+
+        assertThat(result).isEmpty();
+        verify(profilerService).listProfiledPods();
+    }
+
+    @Test
+    void listProfiledPods_returnsMultipleWorkloads() {
+        var pod1 = new ProfiledPodMetadata();
+        pod1.podName = "auth-cache-6fcdc64b64-2cnw9";
+        pod1.namespace = "default";
+        pod1.profilerStatus = "READY";
+
+        var pod2 = new ProfiledPodMetadata();
+        pod2.podName = "payment-svc-7d9f8b-xkz12";
+        pod2.namespace = "production";
+        pod2.profilerStatus = "READY";
+
+        when(profilerService.listProfiledPods()).thenReturn(List.of(pod1, pod2));
+
+        var result = tools.listProfiledPods(null);
+
+        assertThat(result).hasSize(2);
+        assertThat(result).extracting(p -> p.podName)
+                .containsExactly("auth-cache-6fcdc64b64-2cnw9", "payment-svc-7d9f8b-xkz12");
     }
 
     // ── 2. get_pod_jvm_status ──────────────────────────────────────────────────
@@ -202,6 +236,20 @@ class ProfilingToolsTest {
         tools.getRecordingReport(null, "myapp-0", "myapp", "5m");
 
         verify(profilerService).getRecordingReport(null, "myapp-0", "myapp", "5m");
+    }
+
+    @Test
+    void getRecordingReport_propagates404AsToolCallException() {
+        when(profilerService.getRecordingReport("default", "wrong-pod-xyz", "myapp", "5m"))
+                .thenThrow(new ToolCallException(
+                        "Pod not found in Jafra Analyzer: namespace=default pod=wrong-pod-xyz container=myapp\n" +
+                        "Available workloads:\n  • default / auth-cache-6fcdc64b64-2cnw9 / auth-cache\n" +
+                        "Tip: call list_profiled_pods to see the current list before calling this tool."));
+
+        assertThatThrownBy(() -> tools.getRecordingReport("default", "wrong-pod-xyz", "myapp", "5m"))
+                .isInstanceOf(ToolCallException.class)
+                .hasMessageContaining("Pod not found")
+                .hasMessageContaining("list_profiled_pods");
     }
 
     // ── 8. get_jfr_summary ─────────────────────────────────────────────────────

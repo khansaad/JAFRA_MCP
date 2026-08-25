@@ -13,7 +13,7 @@ metadata:
   namespace: jafra-system
   labels:
     app.kubernetes.io/name: async-profiler-mcp-server
-    app.kubernetes.io/version: "0.0.2"
+    app.kubernetes.io/version: "0.1.0"
     app.kubernetes.io/part-of: jafra
 spec:
   replicas: 1
@@ -24,11 +24,11 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/name: async-profiler-mcp-server
-        app.kubernetes.io/version: "0.0.2"
+        app.kubernetes.io/version: "0.1.0"
     spec:
       containers:
         - name: mcp-server
-          image: quay.io/khansaad/async-profiler-mcp-server:0.0.2
+          image: quay.io/khansaad/async-profiler-mcp-server:0.1.0
           # Image is pre-loaded into Kind; always pull from node image cache.
           imagePullPolicy: IfNotPresent
           env:
@@ -44,14 +44,16 @@ spec:
             httpGet:
               path: /q/health/ready
               port: http
-            initialDelaySeconds: 5
+            initialDelaySeconds: 35
             periodSeconds: 5
+            failureThreshold: 3
           livenessProbe:
             httpGet:
               path: /q/health/live
               port: http
-            initialDelaySeconds: 10
+            initialDelaySeconds: 45
             periodSeconds: 10
+            failureThreshold: 3
           resources:
             requests:
               memory: "256Mi"

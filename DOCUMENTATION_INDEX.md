@@ -1,7 +1,7 @@
 # Documentation Index
 
-**Repository:** async-profiler-mcp-server  
-**Image:** `quay.io/khansaad/async-profiler-mcp-server:0.1.0`  
+**Repository:** async-profiler-mcp-server
+**Image:** `quay.io/khansaad/async-profiler-mcp-server:0.1.0`
 **Status:** ✅ Live tools working on Kind cluster
 
 ---
@@ -32,31 +32,31 @@ Full formal specification with complete JSON schemas, all error codes, and examp
 
 ## Tool Status Summary
 
-| # | Tool | Status | Backend |
-|---|------|--------|---------|
-| 1 | `list_profiled_pods` | ✅ Live (stub impl) | jafra-controller (TBD) |
-| 2 | `get_pod_jvm_status` | ✅ Live (stub impl) | jafra-controller (TBD) |
-| 3 | `get_jvm_statistics` | ✅ Live (stub impl) | jafra-controller (TBD) |
-| 4 | `start_recording` | 🔧 Stub | jafra-controller (TBD) |
-| 5 | `stop_recording` | 🔧 Stub | jafra-controller (TBD) |
-| 6 | `get_recording` | 🔧 Stub | jafra-controller (TBD) |
-| 7 | `get_recording_report` | ✅ **Fully wired** | Jafra Analyzer `/report` |
-| 8 | `get_jfr_summary` | ✅ **Fully wired** | Jafra Analyzer `/summary` |
-| 9 | `get_flame_graph` | 🔧 Stub | jafra-controller (TBD) |
+| # | Tool                   | Status             | Backend                                 |
+|---|------------------------|--------------------|-----------------------------------------|
+| 1 | `list_profiled_pods`   | ✅ **Fully wired**  | Jafra Analyzer `GET /api/v1/recordings` |
+| 2 | `get_recording_report` | ✅ **Fully wired**  | Jafra Analyzer `/report`                |
+| 3 | `get_jfr_summary`      | ✅ **Fully wired**  | Jafra Analyzer `/summary`               |
+| 4 | `get_pod_jvm_status`   | ✅ Live (stub impl) | jafra-controller (TBD)                  |
+| 5 | `get_jvm_statistics`   | ✅ Live (stub impl) | jafra-controller (TBD)                  |
+| 6 | `start_recording`      | 🔧 Stub            | jafra-controller (TBD)                  |
+| 7 | `stop_recording`       | 🔧 Stub            | jafra-controller (TBD)                  |
+| 8 | `get_recording`        | 🔧 Stub            | jafra-controller (TBD)                  |
+| 9 | `get_flame_graph`      | 🔧 Stub            | jafra-controller (TBD)                  |
 
 ---
 
 ## Source Files
 
-| File | Purpose |
-|------|---------|
-| [`ProfilingModels.java`](src/main/java/io/causa/profiler/dto/ProfilingModels.java) | All DTOs: `JafraSummaryReport`, `JafraSummaryDocument`, `McpSummary`, `RecordingMetadata`, enums |
-| [`ProfilingTools.java`](src/main/java/io/causa/profiler/mcp/ProfilingTools.java) | All 9 `@Tool` methods |
-| [`ProfilerService.java`](src/main/java/io/causa/profiler/service/ProfilerService.java) | Service interface |
-| [`ProfilerServiceClient.java`](src/main/java/io/causa/profiler/service/ProfilerServiceClient.java) | Jafra Analyzer REST client + `summary_to_mcp.py` logic (Java port) |
-| [`ProfilingToolsTest.java`](src/test/java/io/causa/profiler/mcp/ProfilingToolsTest.java) | 16 unit tests covering all 9 tools |
-| [`smoke_test.py`](smoke_test.py) | End-to-end MCP handshake smoke test |
-| [`manifests/async-profiler-mcp-server-kind.yaml`](manifests/async-profiler-mcp-server-kind.yaml) | Kind deployment manifest |
+| File                                                                                               | Purpose                                                                                                                                          |
+|----------------------------------------------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------|
+| [`ProfilingModels.java`](src/main/java/io/causa/profiler/dto/ProfilingModels.java)                 | All DTOs: `JafraSummaryReport`, `JafraSummaryDocument`, `McpSummary`, `RecordingsListResponse`, `WorkloadRecordings`, `RecordingMetadata`, enums |
+| [`ProfilingTools.java`](src/main/java/io/causa/profiler/mcp/ProfilingTools.java)                   | All 9 `@Tool` methods                                                                                                                            |
+| [`ProfilerService.java`](src/main/java/io/causa/profiler/service/ProfilerService.java)             | Service interface                                                                                                                                |
+| [`ProfilerServiceClient.java`](src/main/java/io/causa/profiler/service/ProfilerServiceClient.java) | Jafra Analyzer REST client + `summary_to_mcp.py` logic (Java port) + 404 error handling                                                          |
+| [`ProfilingToolsTest.java`](src/test/java/io/causa/profiler/mcp/ProfilingToolsTest.java)           | 19 unit tests covering all 9 tools                                                                                                               |
+| [`smoke_test.py`](smoke_test.py)                                                                   | End-to-end MCP handshake smoke test                                                                                                              |
+| [`manifests/async-profiler-mcp-server-kind.yaml`](manifests/async-profiler-mcp-server-kind.yaml)   | Kind deployment manifest                                                                                                                         |
 
 ---
 
@@ -68,8 +68,6 @@ The Jafra Analyzer doesn't expose a recording-ID-based report endpoint. It uses 
 **Why does `get_jfr_summary` exist as a separate tool?**  
 The Jafra Analyzer exposes two distinct endpoints: `/report` (JMC rule analysis) and `/summary` (raw JFR event statistics). The Python `summary_to_mcp.py` script in jafra-io transforms the `/summary` response into a structured payload well-suited for LLM reasoning. `get_jfr_summary` is the Java port of that transformation, delivered as a dedicated MCP tool.
 
-**Why are `start_recording`, `stop_recording`, `get_recording`, `get_flame_graph` stubs?**  
+**Why are `start_recording`, `stop_recording`, `get_recording`, `get_flame_graph` stubs?**
 These tools will be wired to the jafra-controller once it exposes a recording lifecycle REST API. They are kept in the tool inventory today so agent implementations can be written against the full 9-tool surface without a breaking change later.
 
-**`Dtos.java` → `ProfilingModels.java`**  
-Renamed for clarity. `ProfilingModels` communicates what the file contains (the full model layer for profiling) rather than just "DTOs".

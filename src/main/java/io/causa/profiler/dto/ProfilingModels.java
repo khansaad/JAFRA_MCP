@@ -134,6 +134,40 @@ public final class ProfilingModels {
     }
 
     // ──────────────────────────────────────────────
+    // Jafra Analyzer — GET /api/v1/recordings response
+    // Lists all workloads that have JFR recordings in the analyzer.
+    // ──────────────────────────────────────────────
+
+    @RegisterForReflection
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    public static class RecordingsListResponse {
+        /** All workloads with at least one JFR recording stored in the analyzer. */
+        public List<WorkloadRecordings> workloads;
+    }
+
+    @RegisterForReflection
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    public static class WorkloadRecordings {
+        public String namespace;
+        public String pod;
+        public String container;
+        /** Summary of individual JFR files stored for this workload. */
+        public List<RecordingFile> recordings;
+
+        @RegisterForReflection
+        @JsonInclude(JsonInclude.Include.NON_NULL)
+        public static class RecordingFile {
+            public String filename;
+            public int    sequence;
+            public long   bytes;
+            public int    chunks;
+            public String start;
+            public String end;
+            public String reportUrl;
+        }
+    }
+
+    // ──────────────────────────────────────────────
     // Jafra Analyzer — /report response
     // JMC rule-based analysis findings keyed by rule ID.
     // Matches JfrReportGenerator.SummaryReport from jafra-analyzer.
