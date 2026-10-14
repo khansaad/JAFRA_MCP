@@ -1,4 +1,4 @@
-# async-profiler-mcp-server
+# JAFRA-MCP-Server
 
 MCP server that exposes JFR profiling data from Kubernetes JVM pods to an LLM agent.
 
@@ -15,7 +15,7 @@ MCP server that exposes JFR profiling data from Kubernetes JVM pods to an LLM ag
 LLM Agent
     │  MCP (stdio / SSE / Streamable HTTP)
     ▼
-async-profiler-mcp-server   ← this repo
+JAFRA-profiler-mcp-server   ← this repo
     │  REST
     ▼
 Jafra Analyzer   (GET /api/v1/recordings)
@@ -115,7 +115,7 @@ podman push quay.io/khansaad/async-profiler-mcp-server:0.1.0
 ## Project layout
 
 ```
-async-profiler-mcp-server/
+JAFRA-mcp-server/
 ├── Dockerfile
 ├── smoke_test.py                              ← end-to-end MCP handshake smoke test
 ├── manifests/
